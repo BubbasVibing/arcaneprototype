@@ -25,9 +25,14 @@ export const ManifestFileSchema = z.object({
 });
 export type ManifestFile = z.infer<typeof ManifestFileSchema>;
 
-// CLI → POST /link. M1B always CREATES a project (no re-link/lookup yet — §23).
+// CLI → POST /link. The CLI may supply a deterministic projectId (derived from the repo identity) so
+// the dashboard URL is STABLE per repo across re-links/clones; omitted ⇒ the server mints a random id.
 export const LinkRequestSchema = z.object({
   files: z.array(ManifestFileSchema),
+  // A repo-stable projectId the CLI derives from the git remote (else the local path), as a UUIDv5.
+  // Optional + demo-grade: single-tenant today, so a client-chosen id is acceptable (real per-account
+  // ownership is §23 auth). The server upserts on it (re-link ⇒ same project).
+  projectId: z.string().uuid().optional(),
   // Read-only git context captured at link time (§3A.5). Optional: omitted in metadata-only mode and
   // when the root isn't a git repo. The server stores it on the project baseline (M2A); the
   // delta-first engine that consumes it is later.

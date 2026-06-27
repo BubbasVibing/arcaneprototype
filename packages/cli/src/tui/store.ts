@@ -17,6 +17,7 @@ export type FindingRow = Finding & { isNew: boolean };
 export interface AppState {
   root: string;
   sessionId: string;
+  dashboardUrl?: string; // the live web view for this project (shown in the header — click to open)
   events: ChangeEvent[];
   phase: ResultPhase | null;
   conn: ConnState;

@@ -6,6 +6,7 @@ import {
   type GitContext,
 } from "@arcane/shared";
 import { loadIgnoreRules, makeIgnoreMatcher, type IgnoreRules } from "../collector/ignore";
+import { repoProjectId } from "../project-id";
 import { buildCurrentTree } from "../run/manifest";
 import { saveLink, type LinkInfo } from "../session";
 
@@ -32,8 +33,12 @@ export async function link(
   // The working-tree manifest — one authority, shared with `arcane run`'s current tree (no drift).
   const files = await buildCurrentTree(root, ignore);
 
+  // A repo-stable projectId (UUIDv5 of the git remote/path) so the dashboard URL is the same every
+  // time this repo is linked — on this machine or a fresh clone. The server echoes it back.
+  const desiredProjectId = await repoProjectId(root);
   const body = LinkRequestSchema.parse({
     files,
+    projectId: desiredProjectId,
     ...(opts.git ? { git: opts.git } : {}),
     ...(opts.config ? { config: opts.config } : {}),
   });

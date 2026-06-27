@@ -28,7 +28,7 @@ export interface PersistInput {
   projectId: string;
   sessionId: string;
   snapshotId: string;
-  parentSnapshotId: string;
+  parentSnapshotId: string | null; // null for a first analyzed snapshot with no parent (a GitHub source's first push)
   manifestHash: string;
   files: SnapshotFile[];
   scores: { dimension: Dimension; value: number; delta: number }[];

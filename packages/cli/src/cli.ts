@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { ChangeEventSchema, type ChangeEvent } from "@arcane/shared";
 import { WebSocket } from "ws";
 import { login, readToken } from "./auth/token";
-import { cloudHttpBase, cloudWsIngest } from "./cloud";
+import { cloudHttpBase, cloudWsIngest, dashboardProjectUrl } from "./cloud";
 import { buildBaselineSeed, Collector, type LogicalChange } from "./collector";
 import { hashBuffer, initHasher } from "./collector/hash";
 import { loadIgnoreRules, makeIgnoreMatcher } from "./collector/ignore";
@@ -57,6 +57,7 @@ async function linkCmd(target: string): Promise<void> {
     console.log(`✓ linked ${root}`);
     console.log(`  project       ${info.projectId}`);
     console.log(`  baseSnapshot  ${info.baseSnapshotId}`);
+    console.log(`  dashboard     ${dashboardProjectUrl(info.projectId)}`);
     console.log("  run `arcane watch` to start streaming changes");
   } catch (err) {
     console.error(`✗ ${(err as Error).message}`);
@@ -116,6 +117,7 @@ async function watch(target: string, noColor: boolean): Promise<void> {
   const store = new Store({
     root,
     sessionId: session.sessionId,
+    dashboardUrl: dashboardProjectUrl(session.projectId),
     events: [],
     phase: null,
     conn: "connecting",

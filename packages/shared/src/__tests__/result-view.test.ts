@@ -24,7 +24,14 @@ const reduce = (events: ResultEvent[]) => events.reduce(applyResultEvent, emptyR
 describe("applyResultEvent (shared TUI/web reducer)", () => {
   it("starts empty", () => {
     const v = emptyResultView();
-    expect(v).toEqual({ phase: null, scores: [], findings: [], sessionId: null, run: null });
+    expect(v).toEqual({
+      phase: null,
+      scores: [],
+      findings: [],
+      sessionId: null,
+      run: null,
+      workTree: null,
+    });
   });
 
   it("reduces one full frame: analyzing → findings → scores → results → done", () => {

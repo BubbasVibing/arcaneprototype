@@ -17,16 +17,26 @@ export interface ResultFinding extends Finding {
   isNew: boolean; // the cloud's is_new verdict for this snapshot
 }
 
+// The live single-branch git context of a watch session (the dashboard's "Working tree" card). Mirrors
+// WorkTreeResultSchema minus the wire envelope (kind/sessionId).
+export interface WorkTree {
+  branch: string | null;
+  headSha: string | null;
+  baselineRef?: string;
+  changeCount?: number;
+}
+
 export interface ResultView {
   phase: ResultPhase | null;
   scores: Score[]; // latest per dimension, sorted by dimension
   findings: ResultFinding[]; // findings of the current frame
   sessionId: string | null; // the session this view reflects (set from `state` events)
   run: RunReport | null; // M3D: the latest Runtime Delta Engine report (the live run view, §19A)
+  workTree: WorkTree | null; // the live git context of the watch session (set from `worktree` events)
 }
 
 export function emptyResultView(): ResultView {
-  return { phase: null, scores: [], findings: [], sessionId: null, run: null };
+  return { phase: null, scores: [], findings: [], sessionId: null, run: null, workTree: null };
 }
 
 export function applyResultEvent(view: ResultView, ev: ResultEvent): ResultView {
@@ -51,5 +61,16 @@ export function applyResultEvent(view: ResultView, ev: ResultEvent): ResultView 
       // M3D: store the latest RunReport so the terminal and the web dashboard render the same live
       // run view (invariant 4 — same data, same shapes on both surfaces).
       return { ...view, run: ev.report };
+    case "worktree":
+      // The live git context of the watch session — replace in place (the latest frame wins).
+      return {
+        ...view,
+        workTree: {
+          branch: ev.branch,
+          headSha: ev.headSha,
+          baselineRef: ev.baselineRef,
+          changeCount: ev.changeCount,
+        },
+      };
   }
 }

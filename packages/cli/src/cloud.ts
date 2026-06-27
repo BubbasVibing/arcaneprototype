@@ -4,6 +4,18 @@ import type { GitContext } from "@arcane/shared";
 // `link`/`login` need the matching http(s) base, and `watch` needs the authed /ingest WS URL.
 
 const DEFAULT_CLOUD_URL = "ws://127.0.0.1:8787";
+const DEFAULT_DASHBOARD_URL = "http://localhost:3000";
+
+// The web dashboard base — ARCANE_DASHBOARD_URL (set this to your deployed dashboard, e.g.
+// https://<app>.vercel.app); defaults to the local dev server. `dashboardProjectUrl` is the live
+// view for a linked project (the URL the CLI shows so you just click through — no UUID to copy).
+export function dashboardBase(): string {
+  return (process.env.ARCANE_DASHBOARD_URL ?? DEFAULT_DASHBOARD_URL).replace(/\/$/, "");
+}
+
+export function dashboardProjectUrl(projectId: string): string {
+  return `${dashboardBase()}/p/${projectId}`;
+}
 
 // http(s) base for REST (/auth/token, /link) — derived by swapping the ws scheme.
 export function cloudHttpBase(): string {
