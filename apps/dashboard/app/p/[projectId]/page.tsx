@@ -1,6 +1,7 @@
 "use client";
 
 import { FindingsList } from "@/components/FindingsList";
+import { RunView } from "@/components/RunView";
 import { ScoreBars } from "@/components/ScoreBars";
 import { StatusBar } from "@/components/StatusBar";
 import { useResultStream } from "@/lib/useResultStream";
@@ -40,6 +41,11 @@ export default function ProjectView({ params }: { params: { projectId: string } 
           Findings{view.findings.length > 0 ? ` (${view.findings.length})` : ""}
         </h2>
         <FindingsList findings={view.findings} />
+      </section>
+
+      <section>
+        <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-zinc-400">Run</h2>
+        <RunView run={view.run} />
       </section>
     </main>
   );
