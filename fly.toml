@@ -1,0 +1,29 @@
+# Arcane Cloud (Bun engine) — Fly deploy. app + region match the Fly Launch run.
+# Secrets are NOT here — set them once with:
+#   fly secrets set DATABASE_URL=... DIRECT_URL=... SUPABASE_URL=... SUPABASE_ANON_KEY=... ARCANE_DEV_TOKEN=...
+app = "arcaneprototype"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Non-secret runtime config (mirrors the Dockerfile ENV; explicit here so it's visible/overridable).
+[env]
+  NODE_ENV = "production"
+  HOST = "0.0.0.0"
+  PORT = "8787"
+
+[http_service]
+  internal_port = 8787          # must match what the app binds (PORT)
+  force_https = true            # http -> https; WS clients use wss:// over the same service
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1      # keep one warm so a live demo never hits a cold start mid-connect
+
+  # Health check hits the unauthenticated 200 route added to index.ts — no token / DB needed.
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/healthz"

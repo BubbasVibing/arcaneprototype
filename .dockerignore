@@ -1,0 +1,21 @@
+# Build context for the Arcane Cloud image (repo-root context). Keep it lean and never bake secrets
+# or host-built artifacts into the image.
+**/node_modules
+.git
+.gitignore
+**/dist
+**/.next
+**/.turbo
+**/.arcane
+# The cloud image does not need the web apps (heaviest deps) — trim them from the context.
+apps/landing
+apps/dashboard
+# Secrets are provided at runtime via `fly secrets`, never copied in.
+**/.env
+**/.env.*
+!**/.env.example
+# Misc
+bun.lockb
+*.log
+.DS_Store
+docs

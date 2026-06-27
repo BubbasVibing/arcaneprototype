@@ -34,6 +34,11 @@ function parseGitParams(url: URL): GitContext | undefined {
 
 const store = new InMemorySessionStore();
 const port = Number(process.env.PORT ?? 8787);
+// Bind loopback by default (M3D hardening); HOST=0.0.0.0 opts into all-interfaces for a hosted
+// deploy (e.g. Fly, where the platform proxy must reach the container). The token gate + the /run
+// prod-default-token refusal (auth.ts) remain the execution guard, so exposing the interface alone
+// does not open execution.
+const hostname = process.env.HOST ?? "127.0.0.1";
 
 // Per-connection serialization chain: one `arcane watch` = one WS = one session, so serializing
 // every frame on the socket keeps the seq-check from racing concurrent applies into a false gap.
@@ -52,11 +57,17 @@ type ConnData = IngestConn | RunStreamConn;
 
 const server = Bun.serve<ConnData>({
   port,
-  // M3D deployment hardening: bind loopback only. Execution is too dangerous to expose on all
-  // interfaces under a stub token; a real fronting proxy/auth is a later concern (M7/M8).
-  hostname: "127.0.0.1",
+  // M3D deployment hardening: bind loopback by default; HOST=0.0.0.0 opts into all-interfaces for a
+  // hosted deploy. Execution stays gated by the token + the /run prod-default-token refusal (auth.ts).
+  hostname,
   async fetch(req, server) {
     const url = new URL(req.url);
+
+    // Liveness for the hosting platform (Fly health check): a cheap 200 on / and /healthz so the
+    // proxy sees the listener as healthy without needing a token or a DB round-trip.
+    if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/healthz")) {
+      return new Response("ok", { status: 200 });
+    }
 
     // STUB auth (§18): `arcane login` exchanges nothing and receives the configured dev token.
     if (url.pathname === "/auth/token" && req.method === "POST") {
@@ -161,7 +172,7 @@ const server = Bun.serve<ConnData>({
   },
 });
 
-console.log(`Arcane Cloud (M1C) listening on http://127.0.0.1:${server.port}  (ws path: /ingest)`);
+console.log(`Arcane Cloud (M1C) listening on http://${hostname}:${server.port}  (ws path: /ingest)`);
 
 // Shadow-worktree reaping (M2A — resolves the M1 `.arcane-shadow/<projectId>` leak).
 const IDLE_TTL_MS = 60 * 60 * 1000; // reap a project's worktree after 1h with no link/apply/reconnect
