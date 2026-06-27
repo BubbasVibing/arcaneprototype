@@ -40,6 +40,13 @@ if (!HAS_DB) {
   );
 }
 
+// Timeouts sized from MEASURED drain times against a remote Postgres (every ack round-trips since
+// M1C — see services/cloud/README.md): worst single drain ~4.5s, worst whole test ~7.7s (serial).
+// Real headroom, not a hair above, so a slow-network run doesn't flake the load-bearing no-drift
+// proof. (The drains are remote-DB-bound — fine for a test; a latency signal to revisit for real use.)
+const DRAIN_TIMEOUT_MS = 20_000; // ~4.5x the worst observed single drain
+const TEST_TIMEOUT_MS = 90_000; // outer backstop; exceeds the max per-test sum of drains so the labeled wait wins
+
 let proc: ChildProcess;
 let port = 0;
 let shadowRoot = "";
@@ -64,7 +71,7 @@ function freePort(): Promise<number> {
 const httpBase = (): string => `http://127.0.0.1:${port}`;
 const ingestUrl = (): string => `ws://127.0.0.1:${port}/ingest?token=${token}`;
 
-async function waitFor(pred: () => boolean, label: string, ms = 4_000): Promise<void> {
+async function waitFor(pred: () => boolean, label: string, ms = DRAIN_TIMEOUT_MS): Promise<void> {
   const t0 = Date.now();
   while (!pred()) {
     if (Date.now() - t0 > ms) throw new Error(`timed out: ${label}`);
@@ -211,7 +218,7 @@ it.skipIf(!HAS_DB)("Gate 1: disconnect → kill+restart CLI (durable seq) → re
   const paths = ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"];
   expect(await serverManifest(info.sessionId)).toEqual(await diskManifest(fixture, paths));
   rmSync(fixture, { recursive: true, force: true });
-});
+}, TEST_TIMEOUT_MS);
 
 it.skipIf(!HAS_DB)("Gate 2: forced seq-gap → resyncFrom → journal replay recovers; duplicate is a no-op", async () => {
   const { fixture, info } = await setupProject();
@@ -268,7 +275,7 @@ it.skipIf(!HAS_DB)("Gate 2: forced seq-gap → resyncFrom → journal replay rec
     await diskManifest(fixture, ["a.txt", "b.txt", "c.txt", "d.txt"]),
   );
   rmSync(fixture, { recursive: true, force: true });
-});
+}, TEST_TIMEOUT_MS);
 
 it.skipIf(!HAS_DB)("manifest resync: when the journal can't replay, diff the server manifest vs disk and re-emit", async () => {
   const { fixture, info } = await setupProject();
@@ -305,4 +312,4 @@ it.skipIf(!HAS_DB)("manifest resync: when the journal can't replay, diff the ser
     await diskManifest(fixture, ["a.txt", "b.txt", "c.txt"]),
   );
   rmSync(fixture, { recursive: true, force: true });
-});
+}, TEST_TIMEOUT_MS);

@@ -30,15 +30,17 @@ With the DB present the banners are silent and the previously-skipped proofs RUN
 > Run the cli full-stack tests serially if your pooled Postgres connection limit is tight:
 > `set -a && . services/cloud/.env && set +a && npx vitest run --no-file-parallelism` (in `packages/cli`).
 
-### Note on timeouts (remote vs local Postgres)
+### Note on timeouts (remote Postgres latency)
 
 These full-stack tests were written in M1B against the in-memory gateway (fast acks). Since M1C every
-applied event round-trips to Postgres, so against a **remote** Supabase the multi-event drains
-(`b2-resync` Gate 1/Gate 2, `roundtrip` no-drift) can exceed the M1B-era `waitFor`/test timeouts
-(4–5 s) and TIME OUT — the single-op proofs (`repository`, link+ingest, manifest-resync) still pass.
-The failures are pure latency, not logic. Run against a **local** Postgres for low latency, or raise
-the timeouts. Raising the full-stack timeouts so they pass against a remote DB is a tracked follow-up
-(separate from this skip-visibility change).
+applied event round-trips to Postgres, so against a remote Supabase a multi-event drain takes ~2–4.5 s
+(measured) rather than milliseconds. The per-drain `waitFor` is therefore **20 s** and the per-test
+backstop **90 s** (`DRAIN_TIMEOUT_MS` / `TEST_TIMEOUT_MS` in the test files) — real headroom over the
+worst observed ~7.7 s test, so a slow-network run doesn't flake the load-bearing no-drift proof.
+For the fastest runs, point `DATABASE_URL` at a **local** Postgres.
+
+> Latency signal (not a test bug): every applied event is now remote-DB-bound in the proof's hot
+> path. Fine for a test; worth a look when real-world ingest latency comes up later.
 
 ## CI (TODO)
 

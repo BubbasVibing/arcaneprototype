@@ -46,6 +46,12 @@ if (!HAS_DB) {
   );
 }
 
+// Timeouts sized from MEASURED times against a remote Postgres (every ack round-trips since M1C —
+// see services/cloud/README.md): worst drain ~4.5s, worst whole test ~5.4s (serial). Real headroom,
+// not a hair above, so a slow-network run doesn't flake the proof. (Drains are remote-DB-bound.)
+const DRAIN_TIMEOUT_MS = 20_000; // ~4.5x the worst observed drain / round-trip
+const TEST_TIMEOUT_MS = 90_000; // outer backstop, well above the worst observed test
+
 let proc: ChildProcess;
 let port = 0;
 let shadowRoot = "";
@@ -135,7 +141,7 @@ it.skipIf(!HAS_DB)("links, applies + acks one ChangeEvent, and streams the analy
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ingest?token=${token}`);
     const phases: string[] = [];
     let ack: AckEvent | undefined;
-    const t = setTimeout(() => rej(new Error("round-trip timed out")), 5_000);
+    const t = setTimeout(() => rej(new Error("round-trip timed out")), DRAIN_TIMEOUT_MS);
     const maybeDone = (): void => {
       if (ack && phases[phases.length - 1] === "done") {
         clearTimeout(t);
@@ -173,7 +179,7 @@ it.skipIf(!HAS_DB)("links, applies + acks one ChangeEvent, and streams the analy
   const state = (await dbg.json()) as { appliedSeq: number; files: Record<string, string> };
   expect(state.appliedSeq).toBe(1);
   expect(state.files["src/it.ts"]).toBe("deadbeefdeadbeef");
-});
+}, TEST_TIMEOUT_MS);
 
 it.skipIf(!HAS_DB)("drives the real CLI journal + WsClient: acks drain the journal and the shadow matches (no drift)", async () => {
   const httpBase = `http://127.0.0.1:${port}`;
@@ -231,7 +237,7 @@ it.skipIf(!HAS_DB)("drives the real CLI journal + WsClient: acks drain the journ
   }
 
   // Acks drive the journal to empty; the contiguous high-water reaches seq 3.
-  await waitFor(() => journal.depth() === 0, 4_000);
+  await waitFor(() => journal.depth() === 0, DRAIN_TIMEOUT_MS);
   expect(journal.ackSeq).toBe(3);
   ws.close();
 
@@ -244,7 +250,7 @@ it.skipIf(!HAS_DB)("drives the real CLI journal + WsClient: acks drain the journ
   expect(server.files).toEqual(disk);
 
   rmSync(fixture, { recursive: true, force: true });
-});
+}, TEST_TIMEOUT_MS);
 
 async function waitFor(pred: () => boolean, ms: number): Promise<void> {
   const t0 = Date.now();
