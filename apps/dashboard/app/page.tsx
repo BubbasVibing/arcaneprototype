@@ -1,12 +1,31 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-// Minimal index: open a project's live view. The project id is printed by `arcane link`.
+// Optional default project: set NEXT_PUBLIC_DEFAULT_PROJECT_ID in the dashboard env (Next inlines
+// NEXT_PUBLIC_* at build) and the root URL opens straight into that project — no UUID to copy for a
+// demo. Unset → the manual "open a project" form below.
+const DEFAULT_PROJECT_ID = process.env.NEXT_PUBLIC_DEFAULT_PROJECT_ID;
+
 export default function Home() {
   const router = useRouter();
-  const [id, setId] = useState("");
+  const [id, setId] = useState(DEFAULT_PROJECT_ID ?? "");
+
+  useEffect(() => {
+    if (DEFAULT_PROJECT_ID) router.replace(`/p/${DEFAULT_PROJECT_ID}`);
+  }, [router]);
+
+  // A default project is configured — we're redirecting; don't flash the form.
+  if (DEFAULT_PROJECT_ID) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center gap-3 p-6">
+        <span className="h-3 w-3 animate-pulse rounded-sm bg-blue-600" />
+        <p className="text-sm text-slate-500">Opening your project…</p>
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-5 p-6">
       <div className="flex items-center gap-2">
