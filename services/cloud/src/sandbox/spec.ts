@@ -19,8 +19,19 @@ export interface SandboxSpec {
   memBytes: number; // hard memory ceiling (no swap) — OOM-kill on overrun
   cpus: number; // CPU cap (e.g. 1)
   pidsLimit: number; // max processes (fork-bomb containment)
-  network: SandboxNetwork; // M3A: must be "deny" (fail-closed otherwise)
+  network: SandboxNetwork; // M3A: must be "deny". M3B widens to "replay" (probe record-replay); "allow" stays refused.
   scratchBytes?: number; // size of the per-run writable /scratch + /tmp tmpfs (default 16 MiB)
+
+  // ── M3B probe-attach fields (all OPTIONAL — unset ⇒ M3A behavior byte-identical) ───────────────
+  // These let the cloud inject the in-sandbox instrumentation probe WITHOUT redefining the proven
+  // runner. They DO NOT relax containment: `--network none`, the read-only rootfs, caps, and the
+  // watchdog are unchanged; the SI-1 re-proof re-runs the escape suite with these fields SET and must
+  // stay green (probe-containment.test.ts). The probe is telemetry only — the container is the only
+  // boundary (SI-1). The probe's trace leaves the sandbox on STDOUT (a sentinel line), so there is NO
+  // writable host mount and NO copy-out channel — the M3A mount surface is untouched.
+  env?: Record<string, string>; // EXPLICIT allowlist of env vars to set (e.g. NODE_OPTIONS, ARCANE_NET).
+  //                                NOT host passthrough — process.env is never forwarded; secret-stripping holds.
+  probeMount?: { hostPath: string; containerPath: string }; // a single host file mounted READ-ONLY (the preload).
 }
 
 // Why the run ended, if the platform (watchdog / kernel) ended it. `null` = the workload exited on

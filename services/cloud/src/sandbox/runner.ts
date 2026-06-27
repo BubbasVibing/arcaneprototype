@@ -91,6 +91,17 @@ function buildRunArgs(name: string, spec: SandboxSpec): string[] {
   } else {
     args.push("-w", "/scratch");
   }
+  // M3B: the instrumentation probe, mounted READ-ONLY (a single host file). Telemetry only — it rides
+  // INSIDE the cage and is never a containment boundary (SI-1). `:ro` so the workload can't tamper with it.
+  if (spec.probeMount) {
+    args.push("-v", `${spec.probeMount.hostPath}:${spec.probeMount.containerPath}:ro`);
+  }
+  // M3B: an EXPLICIT env allowlist (e.g. NODE_OPTIONS=--require <probe>, ARCANE_NET=deny|replay). This
+  // is NOT host passthrough — process.env is never forwarded, so secret-stripping (§21A) is intact;
+  // only these caller-chosen, non-secret values are set.
+  if (spec.env) {
+    for (const [k, v] of Object.entries(spec.env)) args.push("-e", `${k}=${v}`);
+  }
   // NOTE: no host environment is forwarded — secrets are stripped by construction (default-deny env).
   args.push(spec.image, ...spec.command);
   return args;
@@ -101,10 +112,14 @@ export const dockerRunner: SandboxRunner = {
   isAvailable: dockerDaemonUp,
 
   async run(spec: SandboxSpec): Promise<SandboxResult> {
-    if (spec.network !== "deny") {
-      // M3A is deny-only. `replay`/`allow` arrive with the probe (M3B+). FAIL CLOSED — never silently
-      // honor a non-deny network mode.
-      throw new Error(`sandbox network mode '${spec.network}' is not implemented — M3A is deny-only`);
+    if (spec.network === "allow") {
+      // FAIL CLOSED on "allow" — egress is NEVER silently permitted (§21A honesty rule). "deny" and
+      // M3B's "replay" both run the container with `--network none`; only the in-process probe behavior
+      // differs (block vs serve a recorded fixture). The container, not the probe, denies the network.
+      throw new Error(
+        "sandbox network mode 'allow' is never honored — egress is denied at the container (--network none). " +
+          "Use 'deny' (probe blocks) or 'replay' (probe serves recorded fixtures).",
+      );
     }
 
     const name = `arcane-sbx-${randomUUID()}`;
