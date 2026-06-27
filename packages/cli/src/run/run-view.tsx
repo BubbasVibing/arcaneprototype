@@ -1,5 +1,6 @@
 import { runtimeAdvisory, type ResultPhase, type RunAttribution, type RunMetric, type RunReport } from "@arcane/shared";
 import { Box, render, Text } from "ink";
+import { theme } from "../tui/theme";
 import { useSyncExternalStore } from "react";
 
 // M3D-3 — the terminal half of the live run view. The CLI opens /run/stream after the 202 and feeds
@@ -86,7 +87,7 @@ function PhaseStepper({ phase, noColor }: { phase: ResultPhase | null; noColor: 
         const done = i < activeIdx || phase === "done";
         const active = i === activeIdx && phase !== "done";
         const symbol = active ? "●" : done ? "✓" : "○";
-        const color = noColor ? undefined : active ? "cyan" : done ? "green" : "gray";
+        const color = noColor ? undefined : active ? theme.accent : done ? theme.good : "gray";
         return (
           <Text key={p} color={color}>
             {symbol} {p}
@@ -103,7 +104,7 @@ function ReportView({ report, noColor }: { report: RunReport; noColor: boolean }
   const regressed = (report.attribution?.length ?? 0) > 0 && report.status !== "no-data";
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text bold color={noColor ? undefined : report.status === "no-data" ? "yellow" : regressed ? "red" : "green"}>
+      <Text bold color={noColor ? undefined : report.status === "no-data" ? theme.warn : regressed ? theme.bad : theme.good}>
         {reportHeadline(report)}
       </Text>
       <Text>{report.summary}</Text>
@@ -145,7 +146,7 @@ function ReportView({ report, noColor }: { report: RunReport; noColor: boolean }
                 </Text>
                 {adv ? (
                   <Box marginTop={1}>
-                    <Text wrap="wrap" color={noColor ? undefined : "yellow"}>
+                    <Text wrap="wrap" color={noColor ? undefined : theme.warn}>
                       {"  ⚠ advisory: "}
                       {adv}
                     </Text>

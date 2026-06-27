@@ -1,5 +1,6 @@
 import type { ChangeEvent, ChangeOp } from "@arcane/shared";
 import { Box, Text } from "ink";
+import { theme } from "../theme";
 
 // The ordered change log: one row per locally-emitted ChangeEvent (the CLI has its own
 // seq/op/path — §3A.2). `enter` expands the selected row to show the wire fields the collector
@@ -14,10 +15,10 @@ const OP_GLYPH: Record<ChangeOp, string> = {
 };
 
 const OP_COLOR: Record<ChangeOp, string> = {
-  add: "green",
-  change: "yellow",
-  delete: "red",
-  rename: "magenta",
+  add: theme.good,
+  change: theme.warn,
+  delete: theme.bad,
+  rename: theme.accent,
 };
 
 const MAX_ROWS = 12;

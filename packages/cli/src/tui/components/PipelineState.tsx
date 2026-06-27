@@ -1,5 +1,6 @@
 import type { ResultPhase } from "@arcane/shared";
 import { Box, Text } from "ink";
+import { theme } from "../theme";
 
 // The session pipeline stepper. The `state` ResultEvent is session-scoped (no changeId — M1A
 // decision #2), so this shows ONE current phase for the whole session, advancing as the cloud
@@ -23,7 +24,7 @@ export function PipelineState({
           const done = i < activeIdx;
           const active = i === activeIdx;
           const symbol = active ? "●" : done ? "✓" : "○";
-          const color = noColor ? undefined : active ? "cyan" : done ? "green" : "gray";
+          const color = noColor ? undefined : active ? theme.accent : done ? theme.good : "gray";
           return (
             <Text key={p} color={color}>
               {symbol} {p}

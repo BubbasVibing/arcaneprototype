@@ -1,6 +1,7 @@
 import type { Severity } from "@arcane/shared";
 import { Box, Text } from "ink";
 import type { FindingRow } from "../store";
+import { theme } from "../theme";
 
 // The findings list (M1C). One row per finding from the latest analysis frame: severity, dimension,
 // a NEW tag (is_new vs the previous snapshot), location, and the message. Pure render from the
@@ -8,10 +9,10 @@ import type { FindingRow } from "../store";
 
 const SEVERITY_COLOR: Record<Severity, string> = {
   info: "gray",
-  low: "cyan",
-  medium: "yellow",
-  high: "red",
-  critical: "magenta",
+  low: theme.accent,
+  medium: theme.warn,
+  high: theme.bad,
+  critical: theme.crit,
 };
 
 const MAX_ROWS = 10;
@@ -35,7 +36,7 @@ export function Findings({ findings, noColor }: { findings: FindingRow[]; noColo
                 {f.severity.padEnd(9)}
               </Text>
               <Text color={dim}>{f.dimension.padEnd(11)}</Text>
-              {f.isNew ? <Text color={noColor ? undefined : "green"}>NEW </Text> : null}
+              {f.isNew ? <Text color={noColor ? undefined : theme.accent}>NEW </Text> : null}
               <Text>{loc} </Text>
               <Text color={dim}> {f.message}</Text>
             </Text>
