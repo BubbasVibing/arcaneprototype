@@ -11,39 +11,49 @@ function fmt(n: number | undefined): string {
 
 export function RunView({ run }: { run: RunReport | null }) {
   if (!run) {
-    return <p className="text-sm text-zinc-500">No run yet — trigger one with <code>arcane run</code>.</p>;
+    return (
+      <p className="text-sm text-slate-400">
+        No run yet — trigger one with{" "}
+        <code className="rounded bg-slate-100 px-1 font-mono text-slate-600">arcane run</code>.
+      </p>
+    );
   }
 
   const noData = run.status === "no-data";
   const regressed = hasRuntimeRegression(run);
-  const headlineColor = noData ? "text-amber-300" : regressed ? "text-rose-400" : "text-emerald-400";
+  const headlineColor = noData ? "text-amber-600" : regressed ? "text-rose-600" : "text-emerald-600";
   const tag = noData ? "NO DATA" : `confidence ${run.confidence}`;
 
   return (
-    <div className="space-y-4 rounded border border-zinc-800 bg-zinc-900/60 p-4">
+    <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div>
         <div className={`text-sm font-semibold ${headlineColor}`}>
           {run.workload}{" "}
-          <span className="font-normal text-zinc-400">
+          <span className="font-normal text-slate-500">
             ({run.baselineRef} → {run.currentRef}) · {tag}
           </span>
         </div>
-        <p className="mt-1 text-sm text-zinc-100">{run.summary}</p>
+        <p className="mt-1 text-sm text-slate-800">{run.summary}</p>
       </div>
 
       {(run.metrics ?? []).length > 0 && (
         <div>
-          <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">Metrics</h3>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Metrics
+          </h3>
           <ul className="space-y-1">
             {(run.metrics ?? []).map((m) => {
-              const pct = m.deltaPct == null ? "" : `, ${m.deltaPct > 0 ? "+" : ""}${m.deltaPct.toFixed(0)}%`;
+              const pct =
+                m.deltaPct == null ? "" : `, ${m.deltaPct > 0 ? "+" : ""}${m.deltaPct.toFixed(0)}%`;
               return (
                 <li key={m.key} className="flex items-baseline justify-between text-sm">
-                  <span className={m.headline ? "font-medium" : ""}>{m.key}</span>
-                  <span className="font-mono tabular-nums text-zinc-300">
+                  <span className={m.headline ? "font-medium text-slate-700" : "text-slate-600"}>
+                    {m.key}
+                  </span>
+                  <span className="font-mono tabular-nums text-slate-600">
                     {fmt(m.baseline.median)} → {fmt(m.current.median)}
                     {m.unit ? ` ${m.unit}` : ""}{" "}
-                    <span className={m.delta > 0 ? "text-rose-400" : "text-emerald-400"}>
+                    <span className={m.delta > 0 ? "text-rose-600" : "text-emerald-600"}>
                       (Δ {m.delta > 0 ? "+" : ""}
                       {fmt(m.delta)}
                       {pct})
@@ -58,20 +68,25 @@ export function RunView({ run }: { run: RunReport | null }) {
 
       {(run.attribution ?? []).length > 0 && (
         <div>
-          <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">Attribution</h3>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Attribution
+          </h3>
           <ul className="space-y-2">
             {(run.attribution ?? []).map((a, i) => {
               const advisory = runtimeAdvisory(a.ruleId);
               return (
-                <li key={`${a.ruleId}:${a.file}:${i}`} className="rounded border-l-2 border-zinc-700 bg-zinc-900/60 p-2">
-                  <p className="text-sm text-zinc-100">{a.evidence}</p>
-                  <p className="mt-0.5 font-mono text-xs text-zinc-500">
+                <li
+                  key={`${a.ruleId}:${a.file}:${i}`}
+                  className="rounded border border-l-2 border-slate-200 border-l-slate-300 bg-slate-50 p-2"
+                >
+                  <p className="text-sm text-slate-800">{a.evidence}</p>
+                  <p className="mt-0.5 font-mono text-xs text-slate-400">
                     {a.file}
                     {a.range ? `:${a.range.startLine}` : ""}
                     {a.functionName ? ` · ${a.functionName}` : ""} · {a.ruleId} · {a.confidence}
                   </p>
                   {advisory && (
-                    <p className="mt-1 text-xs italic text-amber-300/80">⚠ advisory: {advisory}</p>
+                    <p className="mt-1 text-xs italic text-amber-700">⚠ advisory: {advisory}</p>
                   )}
                 </li>
               );
@@ -81,7 +96,7 @@ export function RunView({ run }: { run: RunReport | null }) {
       )}
 
       {(run.skipped ?? []).length > 0 && (
-        <p className="text-xs text-zinc-500">skipped: {(run.skipped ?? []).join("; ")}</p>
+        <p className="text-xs text-slate-400">skipped: {(run.skipped ?? []).join("; ")}</p>
       )}
     </div>
   );
