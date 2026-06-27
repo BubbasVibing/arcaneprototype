@@ -62,6 +62,17 @@ export async function insertBaselineSnapshot(
   });
 }
 
+// A lightweight §7 `analysis_jobs` record per analyze run (C2) — M1C analyzes synchronously (no
+// BullMQ queue, M2), so the row lands already `done` rather than tracking a real lifecycle.
+export async function insertAnalysisJob(
+  projectId: string,
+  sessionId: string,
+  snapshotId: string,
+): Promise<void> {
+  await sql`INSERT INTO analysis_jobs (project_id, session_id, snapshot_id, status, started_at, finished_at)
+            VALUES (${projectId}, ${sessionId}, ${snapshotId}, 'done', now(), now())`;
+}
+
 // First event of a watch session: create the §7 `sessions` row (FK anchor for source_snapshots).
 export async function ensureSession(
   sessionId: string,

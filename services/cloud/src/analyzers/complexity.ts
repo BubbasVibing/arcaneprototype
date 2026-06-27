@@ -1,5 +1,6 @@
 import ts from "typescript";
-import type { Finding, Range, Severity } from "@arcane/shared";
+import type { Finding, Severity } from "@arcane/shared";
+import { parse, rangeOf } from "./ts-ast";
 import { findingId, type Analyzer, type AnalyzerInput } from "./types";
 
 // Complexity analyzer (plan M1C, dimension `complexity`). Computes per-function cyclomatic
@@ -11,13 +12,6 @@ import { findingId, type Analyzer, type AnalyzerInput } from "./types";
 const DEFAULT_MAX_CYCLOMATIC = 15;
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const RULE_ID = "complexity/cyclomatic";
-
-function scriptKind(path: string): ts.ScriptKind {
-  if (path.endsWith(".tsx")) return ts.ScriptKind.TSX;
-  if (path.endsWith(".jsx")) return ts.ScriptKind.JSX;
-  if (path.endsWith(".js") || path.endsWith(".mjs") || path.endsWith(".cjs")) return ts.ScriptKind.JS;
-  return ts.ScriptKind.TS;
-}
 
 function isFunctionLike(node: ts.Node): boolean {
   return (
@@ -81,17 +75,6 @@ function functionName(node: ts.Node): string {
   return "anonymous function";
 }
 
-function rangeOf(sf: ts.SourceFile, node: ts.Node): Range {
-  const start = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-  const end = sf.getLineAndCharacterOfPosition(node.getEnd());
-  return {
-    startLine: start.line + 1,
-    startCol: start.character + 1,
-    endLine: end.line + 1,
-    endCol: end.character + 1,
-  };
-}
-
 function severityFor(complexity: number, max: number): Severity {
   if (complexity > max * 2) return "critical";
   if (complexity > max * 1.5) return "high";
@@ -103,7 +86,7 @@ export function makeComplexityAnalyzer(maxCyclomatic = DEFAULT_MAX_CYCLOMATIC): 
     name: "complexity",
     handles: (path) => SOURCE_EXT.test(path) && !path.endsWith(".d.ts"),
     analyze({ path, content }: AnalyzerInput): Finding[] {
-      const sf = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true, scriptKind(path));
+      const sf = parse(path, content);
       const findings: Finding[] = [];
       const walk = (node: ts.Node): void => {
         if (isFunctionLike(node)) {

@@ -88,6 +88,7 @@ export async function analyzeAndEmit(
       scores,
       findings,
     });
+    await repo.insertAnalysisJob(session.projectId, ev.sessionId, snapshotId); // §7 legibility (C2)
 
     // Emit the full current result set: findings first, then per-dimension scores. The CLI framed
     // this set with the `analyzing` phase above; `results`/`done` close it.
