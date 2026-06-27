@@ -54,10 +54,25 @@ export const RunResultSchema = z.object({
   runId: z.string().optional(),
 });
 
+// Working-tree state — the live single-branch git context of an `arcane watch` session. Rides the
+// SAME result stream as state/score/finding so the web dashboard renders it with no new channel. The
+// cloud emits it once per analysis frame, sourcing branch/headSha/baselineRef from the CLI's /ingest
+// git context (§3A.5) and changeCount from the shadow-worktree manifest vs the link baseline. (The
+// multi-branch Work-Tree DAG + teammate presence remain a later milestone, §22.)
+export const WorkTreeResultSchema = z.object({
+  kind: z.literal("worktree"),
+  sessionId: z.string(),
+  branch: z.string().nullable(), // null on detached HEAD / not-a-repo
+  headSha: z.string().nullable(), // null when the repo has no commits yet
+  baselineRef: z.string().optional(), // e.g. "origin/main" (from arcane.toml [baseline].ref)
+  changeCount: z.number().int().nonnegative().optional(), // files changed vs the link baseline
+});
+
 export const ResultEventSchema = z.discriminatedUnion("kind", [
   StateResultSchema,
   ScoreResultSchema,
   FindingResultSchema,
   RunResultSchema,
+  WorkTreeResultSchema,
 ]);
 export type ResultEvent = z.infer<typeof ResultEventSchema>;
