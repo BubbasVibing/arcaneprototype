@@ -110,12 +110,14 @@ export function BentoGrid() {
 
           {/* LEFT — headline + short description */}
           <div className="pt-2">
-            <h2 className="text-5xl md:text-6xl font-light text-zinc-900 leading-[1.05] mb-6">
-              Real-time intelligence.<br />
-              Zero unnecessary work.
+            <h2 className="text-5xl md:text-6xl font-light text-zinc-900 leading-[1.05] mb-8">
+              Real-time intelligence.
             </h2>
+            <p className="text-base text-stone-400 leading-relaxed max-w-sm mb-5">
+              Runtime analysis executes inside an isolated cloud sandbox with resource limits and network restrictions.
+            </p>
             <p className="text-base text-stone-400 leading-relaxed max-w-sm">
-              Every file save streams to Arcane Cloud. Security, complexity, dead code, and type safety scores update live — in your terminal and browser simultaneously.
+              Arcane measures real execution behaviour including runtime, CPU usage, memory consumption, and concurrency.
             </p>
           </div>
 
