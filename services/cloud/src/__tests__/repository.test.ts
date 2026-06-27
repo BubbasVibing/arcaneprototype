@@ -6,6 +6,16 @@ import { expect, test } from "bun:test";
 // DATABASE_URL — out of the module graph when the test is skipped.
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 
+// No silent skips: print a LOUD reason when this Postgres proof is gated out. (`bun test` auto-loads
+// services/cloud/.env, so this normally RUNS; the banner fires only when no DB is configured.)
+if (!HAS_DB) {
+  console.warn(
+    "\n⚠️  repository DB PROOF SKIPPED — DATABASE_URL is unset.\n" +
+      "    The Postgres snapshot/score/finding round-trip did NOT run.\n" +
+      "    Run it: see services/cloud/README.md  →  cd services/cloud && bun test\n",
+  );
+}
+
 test.skipIf(!HAS_DB)("repository round-trips an analyzed snapshot chain", async () => {
   const repo = await import("../db/repository");
   const { sql } = await import("../db/client");

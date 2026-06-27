@@ -29,6 +29,17 @@ const repoRoot = resolve(here, "../../../..");
 const cloudEntry = join(repoRoot, "services/cloud/src/index.ts");
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 
+// No silent skips: if the DB is absent these proofs vanish, and a skipped proof reads like a passing
+// one at a glance. Print a LOUD reason so the gap is unmistakable (the test names don't render for a
+// fully-skipped file — console output is the only channel that surfaces above the summary).
+if (!HAS_DB) {
+  console.warn(
+    "\n⚠️  b2-resync FULL-STACK PROOF SKIPPED — DATABASE_URL is unset.\n" +
+      "    The manifest-rehash NO-DRIFT proof (the project's most load-bearing correctness test) did NOT run.\n" +
+      "    Run it: see services/cloud/README.md  →  set -a && . services/cloud/.env && set +a && npm test\n",
+  );
+}
+
 let proc: ChildProcess;
 let port = 0;
 let shadowRoot = "";

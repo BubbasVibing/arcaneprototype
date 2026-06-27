@@ -35,6 +35,17 @@ const cloudEntry = join(repoRoot, "services/cloud/src/index.ts");
 const DEV_TOKEN = "dev-stub-token";
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 
+// No silent skips: print a LOUD reason when the full-stack round-trip is gated out, so a no-DB run
+// can't be mistaken for one that exercised the cloud (console output is the only channel that
+// surfaces — skipped test names don't render).
+if (!HAS_DB) {
+  console.warn(
+    "\n⚠️  roundtrip FULL-STACK PROOF SKIPPED — DATABASE_URL is unset.\n" +
+      "    The ingest apply+ack round-trip against the real gateway did NOT run.\n" +
+      "    Run it: see services/cloud/README.md  →  set -a && . services/cloud/.env && set +a && npm test\n",
+  );
+}
+
 let proc: ChildProcess;
 let port = 0;
 let shadowRoot = "";
