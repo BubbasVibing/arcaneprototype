@@ -40,7 +40,7 @@ npm run build:shared          # @arcane/shared → dist (required before cloud/C
 npm run cloud                 # → "Arcane Cloud (stub) listening on ws://127.0.0.1:8787"
 
 # terminal 2 — build + run the CLI (Node)
-npm run build -w @arcane/cli
+npm run build -w @yassine115/arcane-cli
 node packages/cli/dist/cli.js sendtest
 ```
 
