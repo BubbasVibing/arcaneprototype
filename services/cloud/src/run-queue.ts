@@ -9,6 +9,7 @@ import {
 } from "./db/repository";
 import type { RunJob } from "./db/repository";
 import { authorizeExecution } from "./run-gate";
+import { pushToRunStream } from "./run-stream";
 import { runDelta } from "./runtime/delta-engine";
 import type { SessionStore } from "./session-store";
 
@@ -20,8 +21,11 @@ import type { SessionStore } from "./session-store";
 const RUN_TTL_MS = 60 * 60 * 1000; // reap finished run rows (heavy two-tree jsonb) after 1h
 const REAP_INTERVAL_MS = 15 * 60 * 1000;
 
-// Best-effort fan-out of a run's lifecycle events: durable result_events rows → Supabase Realtime (web)
-// and (M3D-3) the CLI run-stream socket. Logs + swallows so a fan-out failure never derails the worker.
+// Best-effort fan-out of a run's lifecycle events to BOTH surfaces from ONE call (Invariant 4): the
+// durable result_events rows (→ WAL → Supabase Realtime → web) AND the CLI run-stream socket (M3D-3).
+// Both sinks receive the SAME events array. Logs + swallows so a fan-out failure never derails the
+// worker — and the socket push is in-memory + best-effort (run-stream.ts), so a dead terminal is
+// harmless. The durable rows are the source of truth; the socket is a live mirror.
 export async function fanOutRun(
   projectId: string,
   sessionId: string,
@@ -32,6 +36,8 @@ export async function fanOutRun(
   } catch (e) {
     console.error("run fan-out failed:", e);
   }
+  // sessionId IS the runSessionId — push the same events to any terminal watching this run.
+  pushToRunStream(sessionId, events);
 }
 
 function stateEv(sessionId: string, phase: ResultPhase, runId: string): ResultEvent {

@@ -3,7 +3,7 @@
 // regression, or a non-termination); the measured numbers live in report.metrics. A no-data report
 // yields ZERO findings (honesty: no measurement → no finding, never a fabricated "clean" result).
 
-import type { Finding, RunMetric, RunReport, Severity } from "@arcane/shared";
+import { runtimeAdvisory, type Finding, type RunMetric, type RunReport, type Severity } from "@arcane/shared";
 import { findingId } from "../analyzers/types";
 import { RULE_N_PLUS_ONE } from "./attribute";
 import { METRIC_LATENCY, METRIC_QUERIES } from "./report";
@@ -30,13 +30,10 @@ export function findingsFromReport(report: RunReport): Finding[] {
         functionName: a.functionName,
         // M3D integrity bound: queryCount rides an in-process probe the workload could forge, so the N+1
         // finding is ADVISORY — honest under the trusted-workload assumption, NOT a tamper-proof claim.
-        // The tamper-resistant out-of-process observer lands with multi-tenant auth (see trace.ts).
-        ...(a.ruleId === RULE_N_PLUS_ONE
-          ? {
-              advisory:
-                "queryCount is self-reported by the workload (in-process probe) under the trusted-workload assumption — not tamper-proof",
-            }
-          : {}),
+        // The caveat text has ONE home in @arcane/shared (runtimeAdvisory) — the CLI + dashboard run
+        // views render the same string. The tamper-resistant out-of-process observer lands with
+        // multi-tenant auth (see trace.ts).
+        ...(runtimeAdvisory(a.ruleId) ? { advisory: runtimeAdvisory(a.ruleId) } : {}),
       },
     });
   }

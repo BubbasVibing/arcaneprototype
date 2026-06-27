@@ -4,6 +4,7 @@ import { handleIngest } from "./ingest";
 import { handleLink } from "./link";
 import { handleRun } from "./run-endpoint";
 import { startRunWorker } from "./run-queue";
+import { deregisterRunStream, registerRunStream } from "./run-stream";
 import { InMemorySessionStore } from "./session-store";
 import { listShadowProjectDirs, manifestHash, removeProjectDir } from "./shadow-worktree";
 
@@ -37,11 +38,19 @@ const port = Number(process.env.PORT ?? 8787);
 // Per-connection serialization chain: one `arcane watch` = one WS = one session, so serializing
 // every frame on the socket keeps the seq-check from racing concurrent applies into a false gap.
 interface IngestConn {
+  kind: "ingest";
   chain: Promise<void>;
   git?: GitContext; // read once at the upgrade from the /ingest query params (§3A.5)
 }
+// M3D-3 — a `/run/stream` reader watching ONE run. READ-ONLY: it carries no chain and the socket
+// ignores inbound frames; it exists only to be pushed this run's events (run-stream.ts).
+interface RunStreamConn {
+  kind: "run-stream";
+  runSessionId: string;
+}
+type ConnData = IngestConn | RunStreamConn;
 
-const server = Bun.serve<IngestConn>({
+const server = Bun.serve<ConnData>({
   port,
   // M3D deployment hardening: bind loopback only. Execution is too dangerous to expose on all
   // interfaces under a stub token; a real fronting proxy/auth is a later concern (M7/M8).
@@ -98,12 +107,30 @@ const server = Bun.serve<IngestConn>({
       return handleRun(req, store);
     }
 
+    // `arcane run` live view (M3D-3) — the CLI run-stream WS, token-gated at the upgrade and scoped
+    // to one runSessionId. READ-ONLY results: it only receives this run's events (queued→…→done +
+    // the RunReport) that fanOutRun pushes; it has NO inbound handling, so it cannot trigger or
+    // authorize a run (the execution door is /run alone). A client only ever sees the runSessionId it
+    // names (no cross-session/cross-project firehose).
+    if (url.pathname === "/run/stream") {
+      if (!isValidToken(url.searchParams.get("token"))) {
+        return new Response("unauthorized", { status: 401 });
+      }
+      const runSessionId = url.searchParams.get("runSessionId");
+      if (!runSessionId) return new Response("missing runSessionId", { status: 400 });
+      if (server.upgrade(req, { data: { kind: "run-stream", runSessionId } })) {
+        return undefined;
+      }
+      return new Response("expected a WebSocket upgrade", { status: 426 });
+    }
+
     // `arcane watch` — the WS ingest channel, token-gated at the upgrade.
     if (url.pathname === "/ingest") {
       if (!isValidToken(url.searchParams.get("token"))) {
         return new Response("unauthorized", { status: 401 });
       }
-      if (server.upgrade(req, { data: { chain: Promise.resolve(), git: parseGitParams(url) } })) {
+      const data: ConnData = { kind: "ingest", chain: Promise.resolve(), git: parseGitParams(url) };
+      if (server.upgrade(req, { data })) {
         return undefined;
       }
       return new Response("expected a WebSocket upgrade", { status: 426 });
@@ -114,12 +141,22 @@ const server = Bun.serve<IngestConn>({
     });
   },
   websocket: {
+    // A /run/stream reader registers on open; it is a pure results sink (no inbound handling).
+    open(ws) {
+      if (ws.data.kind === "run-stream") registerRunStream(ws.data.runSessionId, ws);
+    },
     message(ws, raw) {
+      // /run/stream is READ-ONLY — drop any client→server frame (it can never trigger a run).
+      if (ws.data.kind !== "ingest") return;
+      const conn = ws.data; // narrowed to IngestConn (kept through the deferred closure below)
       const text = typeof raw === "string" ? raw : raw.toString();
       // Serialize apply+ack per connection (§3A.3 ordering); the state walk inside runs detached.
-      ws.data.chain = ws.data.chain
-        .then(() => handleIngest(ws, text, store, ws.data.git))
+      conn.chain = conn.chain
+        .then(() => handleIngest(ws, text, store, conn.git))
         .catch((err: unknown) => console.error("ingest error:", err));
+    },
+    close(ws) {
+      if (ws.data.kind === "run-stream") deregisterRunStream(ws.data.runSessionId, ws);
     },
   },
 });
