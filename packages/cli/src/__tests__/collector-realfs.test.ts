@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { Collector } from "../collector";
+import { loadIgnoreRules, makeIgnoreMatcher } from "../collector/ignore";
 import type { LogicalChange } from "../collector/types";
 
 // Real-filesystem proof of the collector against REAL chokidar (not synthetic events): run the
@@ -34,6 +35,7 @@ beforeEach(async () => {
   });
   collector = new Collector({
     root: dir,
+    ignore: makeIgnoreMatcher(await loadIgnoreRules(dir)),
     window: 150,
     maxWait: 600,
     onChange: (change, seq) => events.push({ ...change, seq }),

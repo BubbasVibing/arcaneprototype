@@ -1,16 +1,22 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ChangeEventSchema, type AckEvent, type ChangeEvent } from "@arcane/shared";
+import { simpleGit } from "simple-git";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { buildBaselineSeed, Collector, type LogicalChange } from "../collector";
 import { initHasher, readFileContent } from "../collector/hash";
+import { loadIgnoreRules, makeIgnoreMatcher } from "../collector/ignore";
+import { loadConfig } from "../config";
+import { readGitContext } from "../git";
 import { Journal } from "../journal";
 import { link } from "../link";
+import { walkRepo } from "../repo-walk";
 import { manifestResync } from "../resync";
 import type { LinkInfo } from "../session";
 import { WsClient } from "../transport/ws-client";
@@ -112,6 +118,17 @@ async function buildEvent(
 async function serverManifest(sessionId: string): Promise<Record<string, string>> {
   const r = await fetch(`${httpBase()}/debug/session?sessionId=${sessionId}`);
   return ((await r.json()) as { files: Record<string, string> }).files;
+}
+
+// The full server session view (manifest + git context) for the A2 gate's git assertion.
+async function serverSession(
+  sessionId: string,
+): Promise<{ files: Record<string, string>; git: { branch: string | null; headSha: string | null } | null }> {
+  const r = await fetch(`${httpBase()}/debug/session?sessionId=${sessionId}`);
+  return (await r.json()) as {
+    files: Record<string, string>;
+    git: { branch: string | null; headSha: string | null } | null;
+  };
 }
 
 // A fresh re-hash of the fixture on disk (the no-drift ground truth).
@@ -313,3 +330,142 @@ it.skipIf(!HAS_DB)("manifest resync: when the journal can't replay, diff the ser
   );
   rmSync(fixture, { recursive: true, force: true });
 }, TEST_TIMEOUT_MS);
+
+// THE A2 "DONE WHEN" GATE (Build Guide A2): a scripted burst of mixed edits/renames/deletes against
+// a REAL messy repo — a binary dropped in, an oversized file, .gitignore'd + arcane.toml-ignored dirs
+// touched, and a forced reconnect mid-burst — reconstructs BYTE-IDENTICAL on the server. Drives the
+// REAL Collector + Journal + WsClient wired exactly like `cli.ts watch()` (seed + single ignore
+// matcher + git). "byte-identical" = text content materialized == disk; binary/oversized = hash+size
+// parity (content omitted per §3A.1). The hook is manifestHash equality (server `/debug/session` vs a
+// fresh disk re-hash with the SAME ignore rules).
+it.skipIf(!HAS_DB)(
+  "A2 gate: messy-repo burst (edits/renames/deletes + binary + oversized + ignored) reconstructs byte-identical across a forced reconnect",
+  async () => {
+    const fixture = mkdtempSync(join(tmpdir(), "arcane-a2-"));
+    // Messy tree: ignored dirs/files, source, and (later) a git repo.
+    writeFileSync(join(fixture, ".gitignore"), "build/\n*.log\n");
+    writeFileSync(
+      join(fixture, "arcane.toml"),
+      '[project]\nignore = ["vendor"]\n[baseline]\nref = "main"\n',
+    );
+    writeFileSync(join(fixture, "main.ts"), "export const a = 1;\n"); // pre-existing → edited + deleted
+    writeFileSync(join(fixture, "util.ts"), "export const u = 2;\n"); // pre-existing → renamed (untouched)
+    mkdirSync(join(fixture, "build"));
+    writeFileSync(join(fixture, "build", "out.js"), "compiled\n");
+    mkdirSync(join(fixture, "vendor"));
+    writeFileSync(join(fixture, "vendor", "lib.js"), "vendored\n");
+
+    const git = simpleGit(fixture);
+    await git.init(["--initial-branch=main"]);
+    await git.addConfig("user.email", "t@example.com");
+    await git.addConfig("user.name", "Test");
+    await git.add(["main.ts", "util.ts", "arcane.toml", ".gitignore"]);
+    await git.commit("init");
+
+    // Wiring mirrors cli.ts watch(): one ignore matcher (link/watch/resync), baseline seed, git ctx.
+    const loaded = await loadConfig(fixture);
+    const rules = await loadIgnoreRules(fixture, loaded?.config.project?.ignore);
+    const ignore = makeIgnoreMatcher(rules);
+    const gitCtx = await readGitContext(fixture, loaded?.config.baseline?.ref);
+    const info = await link(fixture, httpBase(), token, { rules, git: gitCtx });
+    const seed = await buildBaselineSeed(fixture, ignore);
+
+    const journal = new Journal(fixture, info.sessionId, info.baseSnapshotId);
+    const mkWs = (): WsClient =>
+      new WsClient({
+        url: ingestUrl(),
+        onResult: () => {},
+        onOpen: () => {
+          for (const ev of journal.replayUnacked()) ws.send(ev);
+        },
+        onAck: (a) => {
+          journal.onAck(a);
+          if (a.resyncFrom !== undefined && journal.has(a.resyncFrom)) {
+            for (const ev of journal.replayUnacked(a.resyncFrom)) ws.send(ev);
+          }
+        },
+      });
+    let ws = mkWs();
+    const emit = (change: LogicalChange, seq: number): void => {
+      const ev: ChangeEvent = {
+        eventId: randomUUID(),
+        sessionId: info.sessionId,
+        projectId: info.projectId,
+        parentSnapshotId: journal.parentSnapshot,
+        seq,
+        ts: Date.now(),
+        ...change,
+      };
+      journal.append(ev);
+      ws.send(ev);
+    };
+    let ready!: () => void;
+    const readyP = new Promise<void>((r) => {
+      ready = r;
+    });
+    const collector = new Collector({
+      root: fixture,
+      ignore,
+      seed,
+      nextSeq: () => journal.allocSeq(),
+      onChange: emit,
+      onReady: () => ready(),
+    });
+    ws.connect();
+    await collector.start();
+    await readyP; // chokidar's initial scan is done; the burst is the only event source
+
+    // Burst, part 1.
+    writeFileSync(join(fixture, "main.ts"), "export const a = 42; // edited\n"); // edit pre-existing
+    writeFileSync(join(fixture, "added.ts"), "export const z = 9;\n"); // add
+    writeFileSync(join(fixture, "logo.bin"), Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x01, 0x02, 0xfe])); // binary
+    writeFileSync(join(fixture, "big.txt"), "x".repeat(600 * 1024)); // oversized (> 512 KiB cap)
+    // Ignored — must produce NO events / stay absent server-side:
+    writeFileSync(join(fixture, "build", "out2.js"), "more\n");
+    writeFileSync(join(fixture, "debug.log"), "noise\n");
+    writeFileSync(join(fixture, "vendor", "new.js"), "v\n");
+    await new Promise((r) => setTimeout(r, 300)); // let part-1 events flow
+
+    // Forced reconnect mid-burst: drop + reopen; the journal retains + replays unacked (§3A.3).
+    ws.close();
+    ws = mkWs();
+    ws.connect();
+
+    // Burst, part 2 (over/after the reconnect): rename an UNTOUCHED pre-existing file (seed-dependent),
+    // change a session-created file, delete a pre-existing file.
+    renameSync(join(fixture, "util.ts"), join(fixture, "renamed.ts"));
+    writeFileSync(join(fixture, "added.ts"), "export const z = 10; // changed\n");
+    rmSync(join(fixture, "main.ts"));
+
+    await waitFor(() => journal.depth() === 0, "A2 burst drains after reconnect", 30_000);
+    await collector.stop();
+    ws.close();
+
+    // BYTE-IDENTICAL: server shadow manifest == a fresh disk re-hash over the SAME (non-ignored) set.
+    const paths = await walkRepo(fixture, ignore);
+    const server = await serverManifest(info.sessionId);
+    expect(server).toEqual(await diskManifest(fixture, paths));
+
+    // Ignored dirs/files never reached the server.
+    expect(Object.keys(server).some((p) => p.startsWith("build/"))).toBe(false);
+    expect(Object.keys(server).some((p) => p.startsWith("vendor/"))).toBe(false);
+    expect(Object.keys(server).some((p) => p.endsWith(".log"))).toBe(false);
+
+    // Binary + oversized present by hash+size only (content omitted), parity with disk.
+    expect(server["logo.bin"]).toBe((await readFileContent(join(fixture, "logo.bin"))).hash);
+    expect(server["big.txt"]).toBe((await readFileContent(join(fixture, "big.txt"))).hash);
+
+    // rename (of an untouched pre-existing file) + delete (of a pre-existing file) both applied.
+    expect(server["renamed.ts"]).toBeDefined();
+    expect(server["util.ts"]).toBeUndefined();
+    expect(server["main.ts"]).toBeUndefined();
+
+    // Git context (§3A.5) attached to the stream.
+    const sess = await serverSession(info.sessionId);
+    expect(sess.git?.branch).toBe("main");
+    expect(sess.git?.headSha).toMatch(/^[0-9a-f]{40}$/);
+
+    rmSync(fixture, { recursive: true, force: true });
+  },
+  TEST_TIMEOUT_MS,
+);

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { ResyncResponseSchema, type ChangeEvent } from "@arcane/shared";
 import { initHasher, readFileContent } from "../collector/hash";
-import { makeIgnoreMatcher } from "../collector/ignore";
+import { loadIgnoreRules, makeIgnoreMatcher, type IgnoreRules } from "../collector/ignore";
 import type { FileContent } from "../collector/types";
 import type { Journal } from "../journal";
 import { walkRepo } from "../repo-walk";
@@ -22,6 +22,7 @@ export async function manifestResync(
   session: LinkInfo,
   journal: Journal,
   send: (ev: ChangeEvent) => void,
+  rules?: IgnoreRules, // the shared matcher; rebuilt here if omitted (must match link/watch — no drift)
 ): Promise<number> {
   const res = await fetch(`${httpBase}/resync?sessionId=${session.sessionId}`, {
     headers: { authorization: `Bearer ${token}` },
@@ -32,7 +33,7 @@ export async function manifestResync(
   );
 
   await initHasher();
-  const ignore = makeIgnoreMatcher();
+  const ignore = makeIgnoreMatcher(rules ?? (await loadIgnoreRules(root)));
   const paths = await walkRepo(root, ignore);
 
   // Disk manifest (path → content), then diff vs the server: add (disk-only), change (hash differs),
@@ -71,6 +72,7 @@ export async function manifestResync(
         contentHash: fc.hash,
         sizeBytes: fc.size,
         encoding: fc.encoding,
+        ...(fc.isBinary ? { isBinary: true } : {}),
         ...(fc.content !== undefined ? { content: fc.content } : {}),
       };
     }

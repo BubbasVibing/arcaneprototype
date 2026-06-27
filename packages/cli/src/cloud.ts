@@ -1,3 +1,5 @@
+import type { GitContext } from "@arcane/shared";
+
 // Resolve the cloud endpoints from a single env var. ARCANE_CLOUD_URL is a ws(s) URL (M1A default);
 // `link`/`login` need the matching http(s) base, and `watch` needs the authed /ingest WS URL.
 
@@ -12,8 +14,15 @@ export function cloudHttpBase(): string {
   return u.toString().replace(/\/$/, "");
 }
 
-// The token-gated WS ingest URL for `arcane watch` (§3B.1 /ingest channel).
-export function cloudWsIngest(token: string): string {
+// The token-gated WS ingest URL for `arcane watch` (§3B.1 /ingest channel). Git context (§3A.5) rides
+// along as connection metadata query params (re-read on each (re)connect) rather than a new message
+// frame — the server reads them at the upgrade and stores them on the session.
+export function cloudWsIngest(token: string, git?: GitContext): string {
   const ws = cloudHttpBase().replace(/^http/, "ws");
-  return `${ws}/ingest?token=${encodeURIComponent(token)}`;
+  const params = new URLSearchParams({ token });
+  if (git?.branch) params.set("branch", git.branch);
+  if (git?.headSha) params.set("headSha", git.headSha);
+  if (git?.baselineRef) params.set("baselineRef", git.baselineRef);
+  if (git?.baselineSha) params.set("baselineSha", git.baselineSha);
+  return `${ws}/ingest?${params.toString()}`;
 }

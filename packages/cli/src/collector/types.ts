@@ -20,12 +20,15 @@ export interface FileMeta {
   size: number;
 }
 
-// Result of reading + hashing a file at flush time (with the M1A utf8 guard applied).
+// Result of reading + hashing a file at flush time (utf8 guard + M2A binary/size caps applied).
 export interface FileContent {
   hash: string;
   size: number;
   encoding: "utf8" | "none";
-  content?: string; // present only when faithfully representable as utf8 (M1A)
+  // Non-UTF-8 bytes → isBinary:true, content omitted (§3A.1). An oversized UTF-8 file is content-
+  // omitted too but is NOT binary (encoding:"none", isBinary:false) — it's text we chose not to inline.
+  isBinary?: boolean;
+  content?: string; // present only when utf8 AND under the inline size cap (M2A)
 }
 
 // One normalized, committed logical change (post-coalesce/pairing) — minus the wire envelope.
@@ -35,6 +38,7 @@ export interface LogicalChange {
   oldPath?: string;
   contentHash?: string;
   sizeBytes?: number;
+  isBinary?: boolean;
   encoding?: Encoding;
   content?: string;
   mode?: number;

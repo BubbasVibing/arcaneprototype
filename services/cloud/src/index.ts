@@ -1,8 +1,26 @@
+import type { GitContext } from "@arcane/shared";
 import { bearerToken, isValidToken, mintDevToken } from "./auth";
 import { handleIngest } from "./ingest";
 import { handleLink } from "./link";
 import { InMemorySessionStore } from "./session-store";
-import { manifestHash } from "./shadow-worktree";
+import { listShadowProjectDirs, manifestHash, removeProjectDir } from "./shadow-worktree";
+
+// Decode git context (§3A.5) carried as /ingest connection metadata. metadata-only mode / not-a-repo
+// sends nothing → undefined. Any param present ⇒ it's a repo (branch/headSha may still be null).
+function parseGitParams(url: URL): GitContext | undefined {
+  const branch = url.searchParams.get("branch");
+  const headSha = url.searchParams.get("headSha");
+  const baselineRef = url.searchParams.get("baselineRef");
+  const baselineSha = url.searchParams.get("baselineSha");
+  if (!branch && !headSha && !baselineRef && !baselineSha) return undefined;
+  return {
+    isRepo: true,
+    branch: branch ?? null,
+    headSha: headSha ?? null,
+    ...(baselineRef ? { baselineRef } : {}),
+    ...(baselineSha ? { baselineSha } : {}),
+  };
+}
 
 // Arcane Cloud — M1C analysis gateway (Build Guide §6 Lane E). On top of M1B's real ingestion
 // (stub-token session, `arcane link` shadow worktree, ordered apply + acks) it now runs the real
@@ -18,6 +36,7 @@ const port = Number(process.env.PORT ?? 8787);
 // every frame on the socket keeps the seq-check from racing concurrent applies into a false gap.
 interface IngestConn {
   chain: Promise<void>;
+  git?: GitContext; // read once at the upgrade from the /ingest query params (§3A.5)
 }
 
 const server = Bun.serve<IngestConn>({
@@ -48,6 +67,7 @@ const server = Bun.serve<IngestConn>({
         appliedSeq: s.appliedSeq,
         currentSnapshotId: s.currentSnapshotId,
         manifestHash: manifestHash(s.manifest),
+        git: s.git ?? null,
         files: Object.fromEntries([...s.manifest.entries()].sort()),
       });
     }
@@ -71,7 +91,9 @@ const server = Bun.serve<IngestConn>({
       if (!isValidToken(url.searchParams.get("token"))) {
         return new Response("unauthorized", { status: 401 });
       }
-      if (server.upgrade(req, { data: { chain: Promise.resolve() } })) return undefined;
+      if (server.upgrade(req, { data: { chain: Promise.resolve(), git: parseGitParams(url) } })) {
+        return undefined;
+      }
       return new Response("expected a WebSocket upgrade", { status: 426 });
     }
 
@@ -84,10 +106,38 @@ const server = Bun.serve<IngestConn>({
       const text = typeof raw === "string" ? raw : raw.toString();
       // Serialize apply+ack per connection (§3A.3 ordering); the state walk inside runs detached.
       ws.data.chain = ws.data.chain
-        .then(() => handleIngest(ws, text, store))
+        .then(() => handleIngest(ws, text, store, ws.data.git))
         .catch((err: unknown) => console.error("ingest error:", err));
     },
   },
 });
 
 console.log(`Arcane Cloud (M1C) listening on http://127.0.0.1:${server.port}  (ws path: /ingest)`);
+
+// Shadow-worktree reaping (M2A — resolves the M1 `.arcane-shadow/<projectId>` leak).
+const IDLE_TTL_MS = 60 * 60 * 1000; // reap a project's worktree after 1h with no link/apply/reconnect
+const REAP_INTERVAL_MS = 15 * 60 * 1000; // reaper cadence
+
+// Boot orphan-sweep: the in-memory store is empty on a cold boot, so EVERY dir under SHADOW_ROOT is an
+// orphan (its baseline is gone) → remove it; the restart self-heal (§3A.4) re-links live projects.
+// NOTE: once a PostgresSessionStore persists baselines, this must reconcile against persisted projects
+// instead of "delete all".
+async function sweepOrphans(): Promise<void> {
+  const live = new Set(await store.listProjectIds());
+  let removed = 0;
+  for (const projectId of await listShadowProjectDirs()) {
+    if (live.has(projectId)) continue;
+    await removeProjectDir(projectId);
+    removed++;
+  }
+  if (removed > 0) console.log(`🧹 swept ${removed} orphaned shadow worktree(s) on boot`);
+}
+await sweepOrphans();
+
+const reaper = setInterval(() => {
+  void store.reapIdle(IDLE_TTL_MS).then((reaped) => {
+    for (const projectId of reaped) void removeProjectDir(projectId);
+    if (reaped.length > 0) console.log(`🧹 reaped ${reaped.length} idle project worktree(s)`);
+  });
+}, REAP_INTERVAL_MS);
+reaper.unref(); // don't keep the process alive for the reaper alone

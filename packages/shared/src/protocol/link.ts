@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { BlobRefSchema, EncodingSchema } from "./change-event";
+import { GitContextSchema } from "./git-context";
 
 // Technical-Spec §3A.4 — the `arcane link` REST contract (CLI → cloud), kept here because it is a
 // cross-lane contract (Build Guide rule 4) just like the streaming ChangeEvent/AckEvent. `link`
@@ -26,6 +27,10 @@ export type ManifestFile = z.infer<typeof ManifestFileSchema>;
 // CLI → POST /link. M1B always CREATES a project (no re-link/lookup yet — §23).
 export const LinkRequestSchema = z.object({
   files: z.array(ManifestFileSchema),
+  // Read-only git context captured at link time (§3A.5). Optional: omitted in metadata-only mode and
+  // when the root isn't a git repo. The server stores it on the project baseline (M2A); the
+  // delta-first engine that consumes it is later.
+  git: GitContextSchema.optional(),
 });
 export type LinkRequest = z.infer<typeof LinkRequestSchema>;
 

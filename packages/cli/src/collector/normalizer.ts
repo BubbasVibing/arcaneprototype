@@ -18,6 +18,11 @@ export interface NormalizerDeps {
   // The seq source. Injected so the journal can be the single durable seq authority (M1B B2 —
   // resumes across CLI restarts). Defaults to an internal counter from 1 (used by unit tests).
   nextSeq?: () => number;
+  // Baseline fingerprints (path → {hash,size}) the SERVER already holds (M2A). Without this, a
+  // pre-existing file that's renamed/deleted but never edited this session is invisible to the
+  // normalizer (its `known` map starts empty) → the delete/rename is dropped → server drift. Seeding
+  // makes those ops fire and the first edit of a baseline file an honest `change` (not `add`).
+  seed?: ReadonlyMap<string, FileMeta>;
 }
 
 interface PendingContent {
@@ -45,6 +50,7 @@ export class Normalizer {
 
   constructor(private readonly deps: NormalizerDeps) {
     this.allocSeq = deps.nextSeq ?? (() => this.fallbackSeq++);
+    if (deps.seed) for (const [path, meta] of deps.seed) this.known.set(path, meta);
   }
 
   handle(ev: RawEvent): void {
@@ -264,6 +270,7 @@ function contentChange(
     sizeBytes: fc.size,
     encoding: fc.encoding,
   };
+  if (fc.isBinary) change.isBinary = true;
   if (fc.content !== undefined) change.content = fc.content;
   if (mode !== undefined) change.mode = mode;
   return change;
@@ -283,6 +290,7 @@ function renameChange(
     sizeBytes: fc.size,
     encoding: fc.encoding,
   };
+  if (fc.isBinary) change.isBinary = true;
   if (fc.content !== undefined) change.content = fc.content;
   if (mode !== undefined) change.mode = mode;
   return change;

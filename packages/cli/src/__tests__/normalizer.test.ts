@@ -214,3 +214,66 @@ describe("collector normalizer — §3A.3 correctness", () => {
     expect(emitted.map((e) => e.op)).toEqual(["add", "change", "rename"]);
   });
 });
+
+// M2A: the normalizer is SEEDED with baseline fingerprints so a pre-existing file (never edited this
+// session) can still be renamed/deleted without server drift, and its first edit is a `change`.
+describe("collector normalizer — baseline seeding (M2A)", () => {
+  function setupSeeded(entries: Array<[string, string]>) {
+    const files = new Map<string, string>();
+    const emitted: Emitted[] = [];
+    const seedMap = new Map<string, { hash: string; size: number }>();
+    for (const [p, content] of entries) {
+      files.set(p, content);
+      const buf = Buffer.from(content, "utf8");
+      seedMap.set(p, { hash: hashBuffer(buf), size: buf.length });
+    }
+    const readContent = async (p: string): Promise<FileContent> => {
+      const c = files.get(p);
+      if (c === undefined) {
+        const e: NodeJS.ErrnoException = new Error(`ENOENT: ${p}`);
+        e.code = "ENOENT";
+        throw e;
+      }
+      const buf = Buffer.from(c, "utf8");
+      return { hash: hashBuffer(buf), size: buf.length, encoding: "utf8", content: c };
+    };
+    const norm = new Normalizer({
+      readContent,
+      onChange: (change, seq) => emitted.push({ ...change, seq }),
+      now: () => Date.now(),
+      window: W,
+      maxWait: MAXWAIT,
+      seed: seedMap,
+    });
+    return { files, emitted, norm };
+  }
+
+  it("emits a delete for a pre-existing (seeded) file removed without an edit", async () => {
+    const { files, emitted, norm } = setupSeeded([["keep.ts", "payload"]]);
+    files.delete("keep.ts");
+    norm.handle({ type: "unlink", path: "keep.ts" });
+    await vi.advanceTimersByTimeAsync(W + 5);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toMatchObject({ op: "delete", path: "keep.ts" });
+    expect(emitted[0]?.content).toBeUndefined();
+  });
+
+  it("emits a rename for a pre-existing (seeded) file moved without an edit", async () => {
+    const { files, emitted, norm } = setupSeeded([["a.ts", "payload"]]);
+    files.delete("a.ts");
+    files.set("b.ts", "payload"); // same content → paired as a rename
+    norm.handle({ type: "unlink", path: "a.ts" });
+    norm.handle({ type: "add", path: "b.ts" });
+    await vi.advanceTimersByTimeAsync(W + 5);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toMatchObject({ op: "rename", path: "b.ts", oldPath: "a.ts" });
+  });
+
+  it("treats the first edit of a seeded file as a change, not an add", async () => {
+    const { files, emitted, norm } = setupSeeded([["a.ts", "v0"]]);
+    files.set("a.ts", "v1");
+    norm.handle({ type: "change", path: "a.ts" });
+    await vi.advanceTimersByTimeAsync(W + 5);
+    expect(emitted[0]).toMatchObject({ op: "change", path: "a.ts", content: "v1" });
+  });
+});

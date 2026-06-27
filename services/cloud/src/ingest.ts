@@ -1,4 +1,10 @@
-import { AckEventSchema, ChangeEventSchema, type AckEvent } from "@arcane/shared";
+import {
+  AckEventSchema,
+  ChangeEventSchema,
+  RELINK_CLOSE_CODE,
+  type AckEvent,
+  type GitContext,
+} from "@arcane/shared";
 import { analyzeAndEmit } from "./pipeline";
 import type { SessionStore } from "./session-store";
 import { applyToShadow } from "./shadow-worktree";
@@ -13,6 +19,7 @@ import { applyToShadow } from "./shadow-worktree";
 export interface WsLike {
   send(data: string): number | void;
   readyState: number;
+  close?(code?: number, reason?: string): void; // used only for the relink self-heal signal
 }
 
 function sendAck(ws: WsLike, ack: AckEvent): void {
@@ -26,6 +33,7 @@ export async function handleIngest(
   ws: WsLike,
   raw: string,
   store: SessionStore,
+  connGit?: GitContext, // git context from the /ingest connection query params (§3A.5)
 ): Promise<void> {
   let payload: unknown;
   try {
@@ -44,9 +52,19 @@ export async function handleIngest(
 
   let session;
   try {
-    session = await store.getOrCreateSession(ev.sessionId, ev.projectId, ev.parentSnapshotId);
+    session = await store.getOrCreateSession(
+      ev.sessionId,
+      ev.projectId,
+      ev.parentSnapshotId,
+      connGit,
+    );
   } catch (err) {
-    console.error(`✗ ${(err as Error).message}`);
+    const msg = (err as Error).message;
+    console.error(`✗ ${msg}`);
+    // Unknown project (the server restarted and lost its in-memory baseline) → signal the CLI to
+    // re-link via an application close code, NOT a new wire frame. The CLI auto-relinks + reconnects
+    // (§3A.4 self-heal). Without this the CLI would replay its journal into a void forever.
+    if (msg.includes("unknown project")) ws.close?.(RELINK_CLOSE_CODE, "relink");
     return;
   }
 

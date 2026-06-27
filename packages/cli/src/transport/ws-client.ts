@@ -1,5 +1,6 @@
 import {
   AckEventSchema,
+  RELINK_CLOSE_CODE,
   ResultEventSchema,
   type AckEvent,
   type ChangeEvent,
@@ -18,11 +19,16 @@ import { WebSocket } from "ws";
 export type ConnState = "connecting" | "open" | "closed" | "error";
 
 export interface WsClientOptions {
-  url: string;
+  // A string, or an async provider resolved on every (re)connect. The provider lets `watch` re-read
+  // git context and fold it into the /ingest URL each connect (§3A.5 refresh) — no new wire frame.
+  url: string | (() => Promise<string>);
   onResult: (ev: ResultEvent) => void;
   onAck?: (ack: AckEvent) => void;
   onOpen?: () => void; // (re)connected — replay the unacked journal tail here
   onState?: (state: ConnState, detail?: string) => void;
+  // Server sent the relink close code (§3A.4): the caller re-links then calls connect() again. We do
+  // NOT auto-reconnect here — replaying into an unknown project would just loop.
+  onRelinkRequired?: () => void;
 }
 
 const MAX_BACKOFF_MS = 5_000;
@@ -38,12 +44,22 @@ export class WsClient {
 
   connect(): void {
     this.closedByUser = false;
-    this.openSocket();
+    void this.openSocket();
   }
 
-  private openSocket(): void {
+  private async openSocket(): Promise<void> {
     this.opts.onState?.("connecting");
-    const ws = new WebSocket(this.opts.url);
+    let url: string;
+    try {
+      url = typeof this.opts.url === "string" ? this.opts.url : await this.opts.url();
+    } catch (err) {
+      // URL provider failed (e.g. a transient git read) — treat like a connect error and back off.
+      this.opts.onState?.("error", (err as Error).message);
+      this.scheduleReconnect();
+      return;
+    }
+    if (this.closedByUser) return; // closed while resolving the URL
+    const ws = new WebSocket(url);
     this.ws = ws;
 
     ws.on("open", () => {
@@ -70,9 +86,15 @@ export class WsClient {
       if (parsed.success) this.opts.onResult(parsed.data);
     });
 
-    ws.on("close", () => {
+    ws.on("close", (code: number) => {
       this.open = false;
       this.opts.onState?.("closed");
+      if (code === RELINK_CLOSE_CODE) {
+        // Project unknown server-side: don't reconnect (it would loop). Hand off to the caller's
+        // relink routine, which re-links and then calls connect() again (§3A.4 self-heal).
+        this.opts.onRelinkRequired?.();
+        return;
+      }
       this.scheduleReconnect();
     });
 
@@ -88,7 +110,7 @@ export class WsClient {
     this.reconnects += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
-      if (!this.closedByUser) this.openSocket();
+      if (!this.closedByUser) void this.openSocket();
     }, delay);
   }
 

@@ -4,8 +4,11 @@ import { ChangeEventSchema, type ChangeEvent } from "@arcane/shared";
 import { WebSocket } from "ws";
 import { login, readToken } from "./auth/token";
 import { cloudHttpBase, cloudWsIngest } from "./cloud";
-import { Collector } from "./collector";
+import { buildBaselineSeed, Collector, type LogicalChange } from "./collector";
 import { hashBuffer, initHasher } from "./collector/hash";
+import { loadIgnoreRules, makeIgnoreMatcher } from "./collector/ignore";
+import { loadConfig, type LoadedConfig } from "./config";
+import { readGitContext } from "./git";
 import { Journal } from "./journal";
 import { link } from "./link";
 import { manifestResync } from "./resync";
@@ -43,7 +46,12 @@ async function linkCmd(target: string): Promise<void> {
     process.exit(1);
   }
   try {
-    const info = await link(root, cloudHttpBase(), token);
+    const loaded = await loadConfigOrExit(root);
+    const metadataOnly = loaded?.config.cloud?.mode === "metadata-only";
+    const info = await link(root, cloudHttpBase(), token, {
+      projectIgnore: loaded?.config.project?.ignore,
+      git: metadataOnly ? undefined : await readGitContext(root, loaded?.config.baseline?.ref),
+    });
     console.log(`✓ linked ${root}`);
     console.log(`  project       ${info.projectId}`);
     console.log(`  baseSnapshot  ${info.baseSnapshotId}`);
@@ -65,6 +73,16 @@ function loadLinkOrExit(root: string): LinkInfo {
   }
 }
 
+// Load arcane.toml, exiting 2 on a config error (§4.2). Returns undefined when there is no file.
+async function loadConfigOrExit(root: string): Promise<LoadedConfig | undefined> {
+  try {
+    return await loadConfig(root);
+  } catch (err) {
+    console.error(`✗ ${(err as Error).message}`);
+    return process.exit(2);
+  }
+}
+
 async function watch(target: string, noColor: boolean): Promise<void> {
   const root = resolve(target);
   const token = readToken();
@@ -72,9 +90,26 @@ async function watch(target: string, noColor: boolean): Promise<void> {
     console.error("✗ not logged in — run `arcane login` first");
     process.exit(1);
   }
-  const session = loadLinkOrExit(root);
-  const journal = new Journal(root, session.sessionId, session.baseSnapshotId);
+  // `let` because the restart self-heal re-links and swaps both (§3A.4): the collector/ws closures
+  // close over these bindings, so reassigning here redirects them to the fresh session + journal.
+  let session = loadLinkOrExit(root);
+  let journal = new Journal(root, session.sessionId, session.baseSnapshotId);
   const httpBase = cloudHttpBase();
+
+  // arcane.toml drives the ignore set and the git baseline ref.
+  const loaded = await loadConfigOrExit(root);
+  // One ignore rule set, built once and threaded to the collector AND the manifest-resync disk-diff
+  // so all paths observe the identical file set (no drift — the byte-identical proof depends on it).
+  const rules = await loadIgnoreRules(root, loaded?.config.project?.ignore);
+  const ignore = makeIgnoreMatcher(rules);
+  // Git context (§3A.5): re-read on each (re)connect and carried as /ingest query params (not a wire
+  // frame). metadata-only mode sends none of it.
+  const baselineRef = loaded?.config.baseline?.ref;
+  const metadataOnly = loaded?.config.cloud?.mode === "metadata-only";
+  // Seed the normalizer with the current baseline fingerprints so a rename/delete of a pre-existing
+  // (never-edited-this-session) file is still streamed — otherwise the server's shadow keeps a stale
+  // file (drift). Same ignore matcher → identical file set as link/watch/resync.
+  const seed = await buildBaselineSeed(root, ignore);
 
   const store = new Store({
     root,
@@ -89,8 +124,15 @@ async function watch(target: string, noColor: boolean): Promise<void> {
     showScores: true,
   });
 
+  // Resync race guard (§3A.4): a manifest resync rewinds the journal's seq counter; collector edits
+  // arriving DURING the resync are buffered (raw, no seq allocated) and replayed with fresh
+  // contiguous seqs after, so the rewind can never collide with a concurrently-allocated seq.
+  let resyncInProgress = false;
+  const pendingDuringResync: LogicalChange[] = [];
+
   const ws = new WsClient({
-    url: cloudWsIngest(token),
+    url: async () =>
+      cloudWsIngest(token, metadataOnly ? undefined : await readGitContext(root, baselineRef)),
     onResult: (ev) => {
       // M1C: the gateway streams `state` (pipeline stepper), plus real `score` + `finding` events.
       if (ev.kind === "state") {
@@ -118,38 +160,91 @@ async function watch(target: string, noColor: boolean): Promise<void> {
         store.setResync(true);
         if (journal.has(ack.resyncFrom)) {
           for (const ev of journal.replayUnacked(ack.resyncFrom)) ws.send(ev);
-        } else {
-          void manifestResync(root, httpBase, token, session, journal, (ev) => ws.send(ev))
-            .then(() => store.setJournalDepth(journal.depth()))
-            .catch((err: unknown) => console.error("manifest resync failed:", err));
+        } else if (!resyncInProgress) {
+          resyncInProgress = true; // gate the collector: edits buffer until finishResync()
+          void manifestResync(root, httpBase, token, session, journal, (ev) => ws.send(ev), rules)
+            .then(finishResync)
+            .catch((err: unknown) => {
+              console.error("manifest resync failed:", err);
+              finishResync(); // still replay buffered edits (a later ack re-resyncs if they gapped)
+            });
         }
       } else if (journal.depth() === 0) {
         store.setResync(false); // fully caught up
       }
     },
     onState: (s) => store.setConn(s),
+    onRelinkRequired: () => void relink(),
   });
+
+  // Self-heal (§3A.4): the cloud restarted and no longer knows this project (it sent the relink close
+  // code). Re-link to mint a fresh project/baseSnapshot/session from current disk, swap in a new
+  // journal, and reconnect. The old project's unacked events are abandoned (the fresh link already
+  // recaptured the working tree); edits during the brief relink window are likewise covered by that
+  // fresh baseline. Full sync-layer durability (baselines surviving restart) stays deferred.
+  let relinking = false;
+  const relink = async (): Promise<void> => {
+    if (relinking) return;
+    relinking = true;
+    store.setResync(true);
+    try {
+      session = await link(root, httpBase, token, {
+        rules,
+        git: metadataOnly ? undefined : await readGitContext(root, baselineRef),
+      });
+      journal = new Journal(root, session.sessionId, session.baseSnapshotId);
+      store.setJournalDepth(journal.depth());
+      console.error("↻ re-linked after cloud restart — resuming watch");
+    } catch (err) {
+      console.error("✗ relink failed:", (err as Error).message);
+    } finally {
+      relinking = false;
+    }
+    ws.connect(); // reconnect with the new session; onOpen replays the (now-empty) journal
+  };
+
+  // Single send funnel for a collector edit: build the wire envelope (§3A.2) onto the journal's
+  // current parent snapshot, journal it (kept until acked), then stream it.
+  const emitChange = (change: LogicalChange, seq: number): void => {
+    const ev: ChangeEvent = {
+      eventId: randomUUID(),
+      sessionId: session.sessionId,
+      projectId: session.projectId,
+      parentSnapshotId: journal.parentSnapshot,
+      seq,
+      ts: Date.now(),
+      ...change,
+    };
+    journal.append(ev);
+    store.addEvent(ev);
+    store.setJournalDepth(journal.depth());
+    store.setPhase("detected"); // optimistic local state until the cloud streams its walk
+    ws.send(ev);
+  };
+
+  // Drain edits buffered during a resync with fresh, contiguous seqs, then reopen the gate. Runs
+  // synchronously in the resync's .then/.catch (no collector timer can interleave before the flag
+  // flips back), so the buffered edits land right after the resync deltas without a gap.
+  const finishResync = (): void => {
+    for (const change of pendingDuringResync.splice(0)) emitChange(change, journal.allocSeq());
+    resyncInProgress = false;
+    store.setJournalDepth(journal.depth());
+  };
 
   const collector = new Collector({
     root,
-    nextSeq: () => journal.allocSeq(), // the journal is the single, durable seq authority (§3A.3)
+    ignore,
+    seed, // baseline fingerprints → pre-existing deletes/renames stream correctly (no drift)
+    // The journal is the single, durable seq authority (§3A.3) — but NOT while a resync is rewinding
+    // its counter. During a resync we hand out no journal seq; the edit is buffered and replayed
+    // (with a fresh seq) by finishResync().
+    nextSeq: () => (resyncInProgress ? -1 : journal.allocSeq()),
     onChange: (change, seq) => {
-      // Build the wire envelope (§3A.2) onto the journal's current parent snapshot, journal it, then
-      // stream it. The journal keeps it until an ack covers its seq.
-      const ev: ChangeEvent = {
-        eventId: randomUUID(),
-        sessionId: session.sessionId,
-        projectId: session.projectId,
-        parentSnapshotId: journal.parentSnapshot,
-        seq,
-        ts: Date.now(),
-        ...change,
-      };
-      journal.append(ev);
-      store.addEvent(ev);
-      store.setJournalDepth(journal.depth());
-      store.setPhase("detected"); // optimistic local state until the cloud streams its walk
-      ws.send(ev);
+      if (resyncInProgress) {
+        pendingDuringResync.push(change);
+        return;
+      }
+      emitChange(change, seq);
     },
   });
 
@@ -194,7 +289,12 @@ async function sendtest(target: string): Promise<void> {
     process.exit(1);
   }
 
-  const info = await link(root, httpBase, token);
+  const loaded = await loadConfigOrExit(root);
+  const metadataOnly = loaded?.config.cloud?.mode === "metadata-only";
+  const info = await link(root, httpBase, token, {
+    projectIgnore: loaded?.config.project?.ignore,
+    git: metadataOnly ? undefined : await readGitContext(root, loaded?.config.baseline?.ref),
+  });
   console.log(
     `→ linked project ${info.projectId.slice(0, 8)} (baseSnapshot ${info.baseSnapshotId.slice(0, 8)})`,
   );

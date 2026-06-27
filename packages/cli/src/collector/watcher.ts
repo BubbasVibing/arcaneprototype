@@ -1,5 +1,4 @@
 import { watch, type FSWatcher } from "chokidar";
-import { makeIgnoreMatcher } from "./ignore";
 import type { RawEvent } from "./types";
 
 // The watcher is a RAW filesystem event source. chokidar's own coalescers (`atomic`,
@@ -15,6 +14,7 @@ const toPosix = (p: string): string => p.split("\\").join("/");
 
 export function startWatcher(
   root: string,
+  ignored: (testPath: string) => boolean, // prebuilt matcher (the single shared IgnoreRules)
   onEvent: (ev: RawEvent) => void,
   onReady?: () => void,
 ): WatcherHandle {
@@ -27,7 +27,7 @@ export function startWatcher(
     alwaysStat: true, // we want stats.mode on add/change
     atomic: false, // normalizer owns same-path-rewrite collapse
     awaitWriteFinish: false, // normalizer owns write coalescing (read-at-flush)
-    ignored: makeIgnoreMatcher(),
+    ignored,
   });
 
   fsw.on("add", (p, stats) => onEvent({ type: "add", path: toPosix(p), mode: stats?.mode }));

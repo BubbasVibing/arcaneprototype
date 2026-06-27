@@ -1,8 +1,9 @@
 import { join } from "node:path";
+import { walkRepo } from "../repo-walk";
 import { initHasher, readFileContent } from "./hash";
 import { Normalizer } from "./normalizer";
 import { startWatcher, type WatcherHandle } from "./watcher";
-import type { LogicalChange } from "./types";
+import type { FileMeta, LogicalChange } from "./types";
 
 // The Collector wires the raw watcher → the normalization state machine, reading file content
 // from disk at flush time. It NEVER analyzes or runs user code (invariant §16.1) — it only
@@ -12,11 +13,30 @@ export type { LogicalChange } from "./types";
 
 export interface CollectorOptions {
   root: string; // absolute path to the watched repo
+  ignore: (testPath: string) => boolean; // the single shared ignore matcher (§3A.1, M2A)
   onChange: (change: LogicalChange, seq: number) => void;
   onReady?: () => void;
   window?: number; // W, default 150 ms
   maxWait?: number; // default 600 ms
   nextSeq?: () => number; // injected seq source (the journal, in `watch`) — see Normalizer (M1B B2)
+  seed?: ReadonlyMap<string, FileMeta>; // baseline fingerprints so pre-existing deletes/renames fire
+}
+
+// Build the baseline fingerprint map (path → {hash,size}) by walking the repo with the SAME ignore
+// matcher used everywhere else. Seeds the normalizer so a pre-existing file that's renamed/deleted
+// without an edit this session is still recognized (no server drift — M2A). O(repo) scan at watch
+// start, same cost as `link`'s walk.
+export async function buildBaselineSeed(
+  root: string,
+  ignore: (testPath: string) => boolean,
+): Promise<Map<string, FileMeta>> {
+  await initHasher();
+  const seed = new Map<string, FileMeta>();
+  for (const path of await walkRepo(root, ignore)) {
+    const fc = await readFileContent(join(root, path));
+    seed.set(path, { hash: fc.hash, size: fc.size });
+  }
+  return seed;
 }
 
 export class Collector {
@@ -31,6 +51,7 @@ export class Collector {
       window: opts.window ?? 150,
       maxWait: opts.maxWait ?? 600,
       nextSeq: opts.nextSeq,
+      seed: opts.seed,
     });
   }
 
@@ -38,6 +59,7 @@ export class Collector {
     await initHasher(); // WASM ready before any file is hashed
     this.watcher = startWatcher(
       this.opts.root,
+      this.opts.ignore,
       (ev) => this.normalizer.handle(ev),
       this.opts.onReady,
     );
