@@ -4,10 +4,27 @@ import {
   RELINK_CLOSE_CODE,
   type AckEvent,
   type GitContext,
+  type WorkTree,
 } from "@arcane/shared";
 import { scheduleAnalysis } from "./pipeline";
-import type { SessionStore } from "./session-store";
+import type { Manifest, SessionState, SessionStore } from "./session-store";
 import { applyToShadow } from "./shadow-worktree";
+
+// Build the live Working-tree payload (the dashboard card) from the session's git context (§3A.5) +
+// the count of files that differ from the link baseline. undefined when there's no git (metadata-only
+// / not a repo) so no `worktree` event is emitted.
+function buildWorkTree(session: SessionState, baseManifest?: Manifest): WorkTree | undefined {
+  const g = session.git;
+  if (!g || !g.isRepo) return undefined;
+  let changeCount: number | undefined;
+  if (baseManifest) {
+    let n = 0;
+    for (const [path, hash] of session.manifest) if (baseManifest.get(path) !== hash) n++; // added/modified
+    for (const path of baseManifest.keys()) if (!session.manifest.has(path)) n++; // removed
+    changeCount = n;
+  }
+  return { branch: g.branch, headSha: g.headSha, baselineRef: g.baselineRef, changeCount };
+}
 
 // Server pipeline ingest (Technical-Spec §3B.1): validate · seq-check · apply patch to the shadow
 // worktree · ack · analyze. After an in-order apply is acked, the analysis pipeline (pipeline.ts)
@@ -90,8 +107,10 @@ export async function handleIngest(
     );
     // Analyze the just-applied snapshot and stream real findings/scores (§3B.1). Debounced per
     // session (M2B) so a burst coalesces to the latest tree state before the whole-tree project
-    // analyzers run; the ack above already went out, so the round-trip stays fast.
-    scheduleAnalysis(ws, session, ev, snapshotId);
+    // analyzers run; the ack above already went out, so the round-trip stays fast. The Working-tree
+    // payload (branch + files-changed-vs-baseline) rides the same frame for the dashboard card.
+    const baseline = await store.getBaseline(session.projectId);
+    scheduleAnalysis(ws, session, ev, snapshotId, buildWorkTree(session, baseline?.manifest));
   } else if (ev.seq <= session.appliedSeq) {
     // Duplicate / retry (§3A.3): a resent event the server already applied. No-op, but re-ack so the
     // CLI drops it from the journal. Dedup is by contiguous seq — durable client seq makes a NEW
