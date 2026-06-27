@@ -21,6 +21,14 @@ export const FixableSchema = z.union([
 ]);
 export type Fixable = z.infer<typeof FixableSchema>;
 
+// M4 (AI judgment) provenance. `source` distinguishes a finding an analyzer MEASURED from one the AI
+// JUDGED — a load-bearing honesty boundary (Product-Requirements §5.6): an AI finding must be visibly
+// distinct on every surface and must never move the measured 0–100 score (it's advisory). OPTIONAL and
+// absent ⇒ "analyzer": every existing deterministic finding + persisted row stays valid with no change.
+// The cloud score engine excludes `source: 'ai'` from scoring; the TUI + dashboard badge it distinctly.
+export const FindingSourceSchema = z.enum(["analyzer", "ai"]);
+export type FindingSource = z.infer<typeof FindingSourceSchema>;
+
 export const FindingSchema = z.object({
   id: z.string(), // stable hash(ruleId + file + range)
   dimension: DimensionSchema,
@@ -30,6 +38,8 @@ export const FindingSchema = z.object({
   file: z.string(),
   range: RangeSchema.optional(),
   fixable: FixableSchema.optional(),
+  // M4: provenance. Absent ⇒ 'analyzer' (deterministic, measured). 'ai' ⇒ judged, advisory, score-exempt.
+  source: FindingSourceSchema.optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 export type Finding = z.infer<typeof FindingSchema>;
