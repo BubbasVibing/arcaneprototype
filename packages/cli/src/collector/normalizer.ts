@@ -15,6 +15,9 @@ export interface NormalizerDeps {
   now: () => number;
   window: number; // W — the hold/pairing window (~150 ms)
   maxWait: number; // cap so a continuous writer still flushes (never drops the final state)
+  // The seq source. Injected so the journal can be the single durable seq authority (M1B B2 —
+  // resumes across CLI restarts). Defaults to an internal counter from 1 (used by unit tests).
+  nextSeq?: () => number;
 }
 
 interface PendingContent {
@@ -35,11 +38,14 @@ export class Normalizer {
   private readonly known = new Map<string, FileMeta>(); // last committed fingerprint per live path
   private readonly pending = new Map<string, PendingContent>();
   private readonly deletes = new Map<string, PendingDelete>();
-  private nextSeq = 1;
+  private fallbackSeq = 1; // used only when no seq source is injected (unit tests)
+  private readonly allocSeq: () => number;
   private chain: Promise<void> = Promise.resolve(); // FIFO serialization of all commits
   private disposed = false;
 
-  constructor(private readonly deps: NormalizerDeps) {}
+  constructor(private readonly deps: NormalizerDeps) {
+    this.allocSeq = deps.nextSeq ?? (() => this.fallbackSeq++);
+  }
 
   handle(ev: RawEvent): void {
     if (this.disposed) return;
@@ -238,8 +244,9 @@ export class Normalizer {
 
   private commit(change: LogicalChange): void {
     // §3A.3: seq is assigned HERE, at the commit point (post-coalesce/pairing), with NO await
-    // between the increment and onChange → emission order == seq order.
-    const seq = this.nextSeq++;
+    // between allocation and onChange → emission order == seq order. The allocator is the journal's
+    // (single durable authority) in `watch`, or the internal fallback counter in unit tests.
+    const seq = this.allocSeq();
     this.deps.onChange(change, seq);
   }
 }

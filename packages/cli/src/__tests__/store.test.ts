@@ -14,6 +14,7 @@ function makeStore() {
     phase: null,
     conn: "connecting",
     journalDepth: 0,
+    resync: false,
   });
 }
 

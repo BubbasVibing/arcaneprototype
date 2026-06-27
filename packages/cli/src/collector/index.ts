@@ -16,6 +16,7 @@ export interface CollectorOptions {
   onReady?: () => void;
   window?: number; // W, default 150 ms
   maxWait?: number; // default 600 ms
+  nextSeq?: () => number; // injected seq source (the journal, in `watch`) — see Normalizer (M1B B2)
 }
 
 export class Collector {
@@ -29,6 +30,7 @@ export class Collector {
       now: () => Date.now(),
       window: opts.window ?? 150,
       maxWait: opts.maxWait ?? 600,
+      nextSeq: opts.nextSeq,
     });
   }
 

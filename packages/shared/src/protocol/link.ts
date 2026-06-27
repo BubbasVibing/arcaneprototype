@@ -43,3 +43,13 @@ export const AuthTokenResponseSchema = z.object({
   token: z.string(),
 });
 export type AuthTokenResponse = z.infer<typeof AuthTokenResponseSchema>;
+
+// CLI → GET /resync?sessionId — the server's current shadow manifest (§3A.4). Used by the CLI's
+// manifest-resync fallback when a resyncFrom names a seq the journal can no longer replay (it was
+// acked + dropped, or the log was truncated): the CLI diffs this against disk and re-emits the delta.
+export const ResyncResponseSchema = z.object({
+  appliedSeq: z.number().int(), // server's highest contiguous applied seq
+  serverSnapshotId: z.string().uuid(), // the snapshot the re-emitted deltas apply onto
+  files: z.record(z.string()), // path → contentHash of the server's shadow worktree
+});
+export type ResyncResponse = z.infer<typeof ResyncResponseSchema>;

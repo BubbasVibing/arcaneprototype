@@ -21,6 +21,7 @@ const CONN_COLOR: Record<ConnState, string> = {
 export function Footer({
   conn,
   journalDepth,
+  resync,
   filtering,
   filter,
   notice,
@@ -28,6 +29,7 @@ export function Footer({
 }: {
   conn: ConnState;
   journalDepth: number;
+  resync: boolean;
   filtering: boolean;
   filter: string;
   notice: string | null;
@@ -38,9 +40,13 @@ export function Footer({
     <Box justifyContent="space-between">
       <Box>
         <Text color={noColor ? undefined : CONN_COLOR[conn]}>● {CONN_LABEL[conn]}</Text>
+        {resync ? (
+          <Text color={noColor ? undefined : "cyan"}>{"  "}resyncing…</Text>
+        ) : null}
         {journalDepth > 0 ? (
           <Text color={noColor ? undefined : "yellow"}>
-            {"  "}unacked: {journalDepth}
+            {"  "}
+            {conn === "open" ? "unacked" : "queued"}: {journalDepth}
           </Text>
         ) : null}
         {filtering || filter ? (

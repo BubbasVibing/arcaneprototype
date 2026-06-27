@@ -93,10 +93,30 @@ export async function handleIngest(
     console.log(
       `← seq=${ev.seq} ${ev.op} ${ev.path} → applied · ack ackSeq=${ev.seq} snapshot=${snapshotId.slice(0, 8)}`,
     );
+  } else if (ev.seq <= session.appliedSeq) {
+    // Duplicate / retry (§3A.3): a resent event the server already applied. No-op, but re-ack so the
+    // CLI drops it from the journal. Dedup is by contiguous seq — durable client seq makes a NEW
+    // eventId at an old seq a true divergence, which a manifest resync (§3A.4) would heal in M1C.
+    sendAck(ws, {
+      sessionId: ev.sessionId,
+      ackSeq: session.appliedSeq,
+      acceptedEventIds: [ev.eventId],
+      serverSnapshotId: session.currentSnapshotId,
+    });
+    console.log(`↺ duplicate seq=${ev.seq} (appliedSeq=${session.appliedSeq}) — re-acked`);
   } else {
-    // STUB: duplicate (seq<=appliedSeq → no-op re-ack) and gap (seq>appliedSeq+1 → resyncFrom) are B2.
+    // Gap: seq > appliedSeq + 1 — a hole in the stream. Do NOT apply and do NOT buffer (the CLI
+    // journal holds the missing events and replays them contiguously). Ask for a resync from the
+    // first missing seq (§3A.3 / §3A.4).
+    sendAck(ws, {
+      sessionId: ev.sessionId,
+      ackSeq: session.appliedSeq,
+      acceptedEventIds: [],
+      serverSnapshotId: session.currentSnapshotId,
+      resyncFrom: session.appliedSeq + 1,
+    });
     console.warn(
-      `⚠ non-contiguous seq=${ev.seq} (appliedSeq=${session.appliedSeq}) — resync handling is B2`,
+      `⋯ gap seq=${ev.seq} (expected ${session.appliedSeq + 1}) — resyncFrom=${session.appliedSeq + 1}`,
     );
   }
 

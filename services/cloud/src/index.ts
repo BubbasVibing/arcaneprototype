@@ -52,6 +52,20 @@ const server = Bun.serve<IngestConn>({
       });
     }
 
+    // Manifest resync (§3A.4) — token-gated. The CLI fetches the server's shadow manifest when its
+    // journal can no longer replay a requested seq, then diffs against disk and re-emits the delta.
+    if (url.pathname === "/resync" && req.method === "GET") {
+      if (!isValidToken(bearerToken(req))) return new Response("unauthorized", { status: 401 });
+      const sid = url.searchParams.get("sessionId");
+      const s = sid ? await store.getSession(sid) : undefined;
+      if (!s) return new Response("no such session", { status: 404 });
+      return Response.json({
+        appliedSeq: s.appliedSeq,
+        serverSnapshotId: s.currentSnapshotId,
+        files: Object.fromEntries([...s.manifest.entries()].sort()),
+      });
+    }
+
     // `arcane watch` — the WS ingest channel, token-gated at the upgrade.
     if (url.pathname === "/ingest") {
       if (!isValidToken(url.searchParams.get("token"))) {

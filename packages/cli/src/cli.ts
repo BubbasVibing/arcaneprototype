@@ -8,6 +8,7 @@ import { Collector } from "./collector";
 import { hashBuffer, initHasher } from "./collector/hash";
 import { Journal } from "./journal";
 import { link } from "./link";
+import { manifestResync } from "./resync";
 import { loadSession, type LinkInfo } from "./session";
 import { WsClient } from "./transport/ws-client";
 import { mountTui } from "./tui/render";
@@ -73,6 +74,7 @@ async function watch(target: string, noColor: boolean): Promise<void> {
   }
   const session = loadLinkOrExit(root);
   const journal = new Journal(root, session.sessionId, session.baseSnapshotId);
+  const httpBase = cloudHttpBase();
 
   const store = new Store({
     root,
@@ -81,6 +83,7 @@ async function watch(target: string, noColor: boolean): Promise<void> {
     phase: null,
     conn: "connecting",
     journalDepth: journal.depth(),
+    resync: false,
   });
 
   const ws = new WsClient({
@@ -89,16 +92,37 @@ async function watch(target: string, noColor: boolean): Promise<void> {
       // M1B: the gateway echoes session-scoped `state` events; drive the pipeline stepper.
       if (ev.kind === "state") store.setPhase(ev.phase);
     },
+    onOpen: () => {
+      // (Re)connected: replay the unacked tail so the server catches up (dups absorbed, §3A.3).
+      const tail = journal.replayUnacked();
+      store.setResync(tail.length > 0);
+      for (const ev of tail) ws.send(ev);
+    },
     onAck: (ack) => {
       // Acks drive the journal: drop covered events, advance the parent snapshot (§3A.3).
       journal.onAck(ack);
       store.setJournalDepth(journal.depth());
+      if (ack.resyncFrom !== undefined) {
+        // The server detected a gap. Replay from there if the journal still has it; otherwise fall
+        // back to a manifest resync (§3A.4).
+        store.setResync(true);
+        if (journal.has(ack.resyncFrom)) {
+          for (const ev of journal.replayUnacked(ack.resyncFrom)) ws.send(ev);
+        } else {
+          void manifestResync(root, httpBase, token, session, journal, (ev) => ws.send(ev))
+            .then(() => store.setJournalDepth(journal.depth()))
+            .catch((err: unknown) => console.error("manifest resync failed:", err));
+        }
+      } else if (journal.depth() === 0) {
+        store.setResync(false); // fully caught up
+      }
     },
     onState: (s) => store.setConn(s),
   });
 
   const collector = new Collector({
     root,
+    nextSeq: () => journal.allocSeq(), // the journal is the single, durable seq authority (§3A.3)
     onChange: (change, seq) => {
       // Build the wire envelope (§3A.2) onto the journal's current parent snapshot, journal it, then
       // stream it. The journal keeps it until an ack covers its seq.

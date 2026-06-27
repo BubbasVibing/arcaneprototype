@@ -175,6 +175,10 @@ it("drives the real CLI journal + WsClient: acks drain the journal and the shado
     url: `ws://127.0.0.1:${port}/ingest?token=${token}`,
     onResult: () => {},
     onAck: (ack) => journal.onAck(ack),
+    // The journal owns retention; on (re)connect replay the unacked tail (the way `watch` does).
+    onOpen: () => {
+      for (const ev of journal.replayUnacked()) ws.send(ev);
+    },
   });
   ws.connect();
 

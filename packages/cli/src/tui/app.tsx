@@ -116,6 +116,7 @@ export function App({ store, noColor, onQuit }: AppProps) {
       <Footer
         conn={state.conn}
         journalDepth={state.journalDepth}
+        resync={state.resync}
         filtering={filtering}
         filter={filter}
         notice={notice}

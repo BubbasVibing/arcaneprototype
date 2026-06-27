@@ -15,6 +15,7 @@ export interface AppState {
   phase: ResultPhase | null;
   conn: ConnState;
   journalDepth: number; // unacked events buffered in the journal (§3A.3)
+  resync: boolean; // a reconnect/gap is being replayed (§3A.4)
 }
 
 export class Store {
@@ -54,6 +55,12 @@ export class Store {
   setJournalDepth(journalDepth: number): void {
     if (journalDepth === this.state.journalDepth) return;
     this.state = { ...this.state, journalDepth };
+    this.emit();
+  }
+
+  setResync(resync: boolean): void {
+    if (resync === this.state.resync) return;
+    this.state = { ...this.state, resync };
     this.emit();
   }
 }
