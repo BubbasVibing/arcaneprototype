@@ -5,6 +5,7 @@ import { handleLink } from "./link";
 import { handleRun } from "./run-endpoint";
 import { startRunWorker } from "./run-queue";
 import { deregisterRunStream, registerRunStream } from "./run-stream";
+import { handleGithubWebhook } from "./github/webhook";
 import { InMemorySessionStore } from "./session-store";
 import { listShadowProjectDirs, manifestHash, removeProjectDir } from "./shadow-worktree";
 
@@ -116,6 +117,14 @@ const server = Bun.serve<ConnData>({
     if (url.pathname === "/run" && req.method === "POST") {
       if (!isValidToken(bearerToken(req))) return new Response("unauthorized", { status: 401 });
       return handleRun(req, store);
+    }
+
+    // GitHub App connector (Technical-Spec §13) — a SECOND analysis source, additive to the CLI path.
+    // NOT gated by the Arcane dev token: GitHub authenticates each delivery with an HMAC over the body
+    // (X-Hub-Signature-256), which handleGithubWebhook verifies against GITHUB_WEBHOOK_SECRET. Disabled
+    // (503) until that secret is configured.
+    if (url.pathname === "/github/webhook" && req.method === "POST") {
+      return handleGithubWebhook(req);
     }
 
     // `arcane run` live view (M3D-3) — the CLI run-stream WS, token-gated at the upgrade and scoped

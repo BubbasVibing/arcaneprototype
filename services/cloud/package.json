@@ -12,6 +12,9 @@
   },
   "dependencies": {
     "@arcane/shared": "*",
+    "@octokit/auth-app": "^8.2.0",
+    "@octokit/rest": "^22.0.1",
+    "@octokit/webhooks": "^14.2.0",
     "typescript": "^5.7.2"
   },
   "devDependencies": {
