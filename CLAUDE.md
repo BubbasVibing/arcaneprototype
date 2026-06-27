@@ -28,6 +28,14 @@ RULES (hard):
 9. Cite the doc section for non-obvious decisions (e.g. // per Technical-Spec §3A).
 10. One concern per commit/PR. Small, atomic, reversible. Don't refactor unrelated code.
 
+SESSION GIT DISCIPLINE (hard — a prior session reported "committed" when nothing was; never again):
+- START of session: run `git log --oneline` and confirm it shows the expected prior-phase commit,
+  and `git status` shows a CLEAN working tree, BEFORE building. If the log is empty/unexpected or
+  the tree is dirty, STOP and tell the user — do not build on an unverified baseline.
+- END of session: actually `git commit` AND `git push`, then PROVE the push landed — `git status`
+  says "up to date with 'origin/main'" and `git rev-parse HEAD` == `git rev-parse origin/main`.
+  Never report "committed"/"pushed" without that `git log`/`rev-parse` proof.
+
 STACK (two runtimes — don't mix):
 - CLI (packages/cli): Node ≥20, TS strict, ESM. ink+react (jsx: react-jsx), chokidar, ws,
   xxhash-wasm, simple-git, smol-toml, zod, chalk. NO native addons.
