@@ -111,7 +111,7 @@ export default function TerraPage() {
   const dashboardRef = useRef<HTMLDivElement>(null)
   const heroRef = useRef<HTMLDivElement>(null)
 
-  const CLI_COMMAND = "npm install -g @arcane/cli"
+  const CLI_COMMAND = "npm i @yassine115/arcane-cli"
 
   const handleCopy = () => {
     navigator.clipboard.writeText(CLI_COMMAND)
