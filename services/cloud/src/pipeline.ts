@@ -51,7 +51,16 @@ export async function analyzeAndEmit(
   ev: ChangeEvent,
   snapshotId: string,
 ): Promise<void> {
-  send(ws, { kind: "state", sessionId: ev.sessionId, phase: "analyzing" });
+  // Tee every ResultEvent to BOTH sinks (invariant 4): `send` → the CLI socket (immediate, unchanged)
+  // AND a frame buffer flushed to `result_events` at frame end → WAL → Realtime → the web dashboard.
+  // ONE emit point; the two surfaces can't drift. The buffer order IS the emit order (analyzing first).
+  const frame: ResultEvent[] = [];
+  const emit = (event: ResultEvent): void => {
+    send(ws, event);
+    frame.push(event);
+  };
+
+  emit({ kind: "state", sessionId: ev.sessionId, phase: "analyzing" });
   try {
     // Parent = the latest analyzed snapshot of this session, else the project baseline (D2a).
     const parentSnapshotId =
@@ -94,10 +103,10 @@ export async function analyzeAndEmit(
     // this set with the `analyzing` phase above; `results`/`done` close it.
     for (const f of findings) {
       const { isNew, ...finding }: ScoredFinding = f;
-      send(ws, { kind: "finding", finding, isNew });
+      emit({ kind: "finding", finding, isNew });
     }
-    for (const s of scores) send(ws, { kind: "score", ...s });
-    send(ws, { kind: "state", sessionId: ev.sessionId, phase: "results" });
+    for (const s of scores) emit({ kind: "score", ...s });
+    emit({ kind: "state", sessionId: ev.sessionId, phase: "results" });
     console.log(
       `⚙ analyzed seq=${ev.seq} ${ev.path} → ${findings.length} finding(s), ` +
         `${scores.map((s) => `${s.dimension}=${s.value}(${s.delta >= 0 ? "+" : ""}${s.delta})`).join(" ")}`,
@@ -107,6 +116,20 @@ export async function analyzeAndEmit(
     // corrupts the sync layer. Log and still close the frame so the TUI doesn't hang on "analyzing".
     console.error(`✗ analyze failed seq=${ev.seq} ${ev.path}:`, (err as Error).message);
   } finally {
-    send(ws, { kind: "state", sessionId: ev.sessionId, phase: "done" });
+    emit({ kind: "state", sessionId: ev.sessionId, phase: "done" });
+    // Fan out the whole frame to the web in ONE batched INSERT (rows in emit order → the analyzing
+    // row holds the frame-min `seq`). Best-effort: a failure never corrupts the sync layer or the ack
+    // — scores are full-replace + findings full-set per frame, so the next frame self-heals. The only
+    // unhealed case (a permanent failure on a session's LAST frame) is logged loudly here (M1D).
+    try {
+      await repo.insertResultEvents({
+        projectId: session.projectId,
+        sessionId: ev.sessionId,
+        snapshotId,
+        events: frame,
+      });
+    } catch (err) {
+      console.error(`✗ result_events fan-out failed seq=${ev.seq}:`, (err as Error).message);
+    }
   }
 }

@@ -8,14 +8,21 @@ The full-stack proofs that spin the real Bun gateway against Postgres are **gate
 - `packages/cli/src/__tests__/b2-resync.test.ts` — Gate 1/Gate 2 + the manifest-rehash **no-drift**
   proof, the most load-bearing correctness test in the project (vitest)
 - `services/cloud/src/__tests__/repository.test.ts` — Postgres snapshot/score/finding round-trip (bun)
+- `services/cloud/src/__tests__/realtime.test.ts` — **M1D** web fan-out: an ANON client subscribes to
+  Realtime `project:{id}`, an edit is mirrored, and session-scoped hydration reconstructs it (bun).
+  Needs `SUPABASE_URL` + `SUPABASE_ANON_KEY` (anon — never `service_role`) in `.env`, on top of
+  `DATABASE_URL`, and migrations 0003/0004 applied.
 
 ## Run the full suite against the real DB
 
-`services/cloud/.env` is already wired (copy `.env.example` if not). One-time, migrate the DB:
+`services/cloud/.env` is already wired (copy `.env.example` if not).
 
-```sh
-npm run migrate -w @arcane/cloud      # uses DIRECT_URL/5432; bun auto-loads services/cloud/.env
-```
+**Migrations on the hosted Supabase project go through a privileged path, NOT `npm run migrate`.** The
+app role (`arcane_cloud`, the pooled connection) has DML but **not DDL** on `public`, so the migrate
+script gets `permission denied for schema public`. Apply `src/db/migrations/*.sql` via the Supabase
+**SQL editor** or the management API (each migration is plain, idempotent SQL). The script + its
+`_arcane_migrations` table are only usable against a Postgres where your connection role can do DDL
+(e.g. a local DB). 0001–0004 are already applied to the hosted project.
 
 Then, from the **repo root**, one command runs everything with the DB:
 

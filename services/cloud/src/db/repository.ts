@@ -1,4 +1,4 @@
-import type { Dimension, Severity } from "@arcane/shared";
+import type { Dimension, ResultEvent, Severity } from "@arcane/shared";
 import { findingKey } from "../analyzers/types";
 import type { ScoredFinding } from "../score-engine";
 import { sql } from "./client";
@@ -128,6 +128,37 @@ export async function getFindings(snapshotId: string): Promise<StoredFinding[]> 
 
 export function keyOfStored(f: StoredFinding): string {
   return findingKey(f.ruleId, f.file, f.startLine, f.endLine);
+}
+
+// Fan-out persistence (M1D): write one analyzed frame's ResultEvents to `result_events` as ONE
+// batched INSERT — the durable copy AND, via WAL→Realtime postgres_changes, the live push to the web
+// dashboard. Rows are inserted in the given (emit) order (analyzing first) so the identity `seq` is
+// assigned in that order and each frame's `analyzing` row holds the frame-minimum seq — the ordering
+// the browser's hydration relies on. `state` events are session-scoped (snapshot_id NULL);
+// `score`/`finding` attach to the analyzed snapshot. The caller treats this as best-effort (logs +
+// swallows) so a fan-out failure never corrupts the sync layer or the ack; the next frame self-heals.
+export async function insertResultEvents(input: {
+  projectId: string;
+  sessionId: string;
+  snapshotId: string;
+  events: ResultEvent[];
+}): Promise<void> {
+  if (input.events.length === 0) return;
+  // Pass ONE jsonb array of {snapshot_id, kind, payload} rows (Bun.sql serializes the JS array to
+  // jsonb) and unnest it WITH ORDINALITY so rows are inserted in array (emit) order → the identity
+  // `seq` follows emit order (analyzing first → frame-minimum). state events are session-scoped
+  // (snapshot_id null); score/finding attach to the analyzed snapshot.
+  const rows = input.events.map((ev) => ({
+    snapshot_id: ev.kind === "score" || ev.kind === "finding" ? input.snapshotId : null,
+    kind: ev.kind,
+    payload: ev,
+  }));
+  await sql`
+    INSERT INTO result_events (project_id, session_id, snapshot_id, kind, payload)
+    SELECT ${input.projectId}::uuid, ${input.sessionId}::uuid,
+           (r.value->>'snapshot_id')::uuid, r.value->>'kind', r.value->'payload'
+    FROM jsonb_array_elements(${rows}::jsonb) WITH ORDINALITY AS r(value, ord)
+    ORDER BY r.ord`;
 }
 
 // Persist one analyzed snapshot + its files, scores, and findings in a SINGLE transaction (D2a):
