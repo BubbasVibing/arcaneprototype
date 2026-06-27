@@ -437,14 +437,24 @@ it.skipIf(!HAS_DB)(
     writeFileSync(join(fixture, "added.ts"), "export const z = 10; // changed\n");
     rmSync(join(fixture, "main.ts"));
 
-    await waitFor(() => journal.depth() === 0, "A2 burst drains after reconnect", 30_000);
+    // Settle by CONVERGENCE, not journal depth: the collector's debounce + the forced reconnect mean
+    // `depth()===0` can momentarily hold during a lull before part-2 is even emitted. Disk is stable
+    // now (no more fs ops), so poll the server shadow until it matches the disk target.
+    const paths = await walkRepo(fixture, ignore);
+    const disk = await diskManifest(fixture, paths);
+    const canon = (m: Record<string, string>): string => JSON.stringify(Object.entries(m).sort());
+    const target = canon(disk);
+    const t0 = Date.now();
+    while (canon(await serverManifest(info.sessionId)) !== target || journal.depth() !== 0) {
+      if (Date.now() - t0 > 30_000) throw new Error("timed out: server shadow did not converge to disk");
+      await new Promise((r) => setTimeout(r, 50));
+    }
     await collector.stop();
     ws.close();
 
     // BYTE-IDENTICAL: server shadow manifest == a fresh disk re-hash over the SAME (non-ignored) set.
-    const paths = await walkRepo(fixture, ignore);
     const server = await serverManifest(info.sessionId);
-    expect(server).toEqual(await diskManifest(fixture, paths));
+    expect(server).toEqual(disk);
 
     // Ignored dirs/files never reached the server.
     expect(Object.keys(server).some((p) => p.startsWith("build/"))).toBe(false);

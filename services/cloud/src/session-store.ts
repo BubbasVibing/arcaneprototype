@@ -4,7 +4,7 @@
 // `PostgresSessionStore` (sessions + source_snapshots + source_files) without touching ingest logic.
 // All methods are async for exactly that swap.
 
-import type { GitContext } from "@arcane/shared";
+import type { ArcaneConfig, GitContext } from "@arcane/shared";
 
 // A shadow-worktree manifest: repo-relative POSIX path → CLI-provided contentHash. The server never
 // hashes (§3A.3) — it trusts these — so the manifest is the authority for `snapshotId`.
@@ -15,6 +15,7 @@ export interface ProjectBaseline {
   manifest: Manifest;
   baseSnapshotId: string;
   git?: GitContext; // read-only git context captured at link time (§3A.5)
+  config?: ArcaneConfig; // validated arcane.toml — selects + configures analyzers (M2B)
   lastActiveAt: number; // epoch ms of last link/apply for this project — drives idle reaping
 }
 
@@ -27,6 +28,7 @@ export interface SessionState {
   currentSnapshotId: string;
   baseSnapshotId: string;
   git?: GitContext; // refreshed from /ingest connection metadata on each (re)connect (§3A.5)
+  config?: ArcaneConfig; // from the project baseline (link time) — drives analyzer selection (M2B)
   lastActiveAt: number; // epoch ms of last apply/reconnect — drives idle reaping
 }
 
@@ -94,6 +96,7 @@ export class InMemorySessionStore implements SessionStore {
       currentSnapshotId: parentSnapshotId,
       baseSnapshotId: baseline.baseSnapshotId,
       git: git ?? baseline.git, // connection git wins; else fall back to link-time git
+      config: baseline.config,
       lastActiveAt: now,
     };
     this.sessions.set(sessionId, state);

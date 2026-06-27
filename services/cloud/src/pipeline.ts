@@ -1,17 +1,18 @@
 import {
   ResultEventSchema,
+  type ArcaneConfig,
   type ChangeEvent,
   type Finding,
   type Range,
   type ResultEvent,
 } from "@arcane/shared";
-import { COVERED_DIMENSIONS, runAnalyzers } from "./analyzers";
+import { coveredDimensions, runAnalyzers, runProjectAnalyzers, selectAnalyzers } from "./analyzers";
 import { findingId } from "./analyzers/types";
 import * as repo from "./db/repository";
 import type { WsLike } from "./ingest";
 import { scoreSnapshot, type ScoredFinding } from "./score-engine";
 import type { SessionState } from "./session-store";
-import { manifestHash, readShadowFile } from "./shadow-worktree";
+import { manifestHash, projectDir, readShadowFile } from "./shadow-worktree";
 
 // The analysis pipeline (plan M1C / D2a). Runs AFTER the ack in handleIngest's in-order branch,
 // serialized per connection. It owns the ordering and the parent-snapshot authority:
@@ -45,11 +46,43 @@ function toFinding(s: repo.StoredFinding): Finding {
   };
 }
 
+// Per-session trailing debounce + AbortController (M2B): whole-tree project analyzers (semgrep etc.)
+// can't run on every keystroke, so coalesce a burst to the latest tree state (§3B.1/§3B.3). The ack
+// already went out in handleIngest, so this added latency is post-ack. A newer event aborts the
+// in-flight/pending analysis and reschedules.
+interface ScheduledAnalysis {
+  timer: ReturnType<typeof setTimeout>;
+  controller: AbortController;
+}
+const scheduled = new Map<string, ScheduledAnalysis>();
+const DEBOUNCE_MS = 120;
+
+export function scheduleAnalysis(
+  ws: WsLike,
+  session: SessionState,
+  ev: ChangeEvent,
+  snapshotId: string,
+): void {
+  const existing = scheduled.get(ev.sessionId);
+  if (existing) {
+    clearTimeout(existing.timer);
+    existing.controller.abort(); // supersede a pending or in-flight analysis for this session
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    void analyzeAndEmit(ws, session, ev, snapshotId, controller.signal).finally(() => {
+      if (scheduled.get(ev.sessionId)?.controller === controller) scheduled.delete(ev.sessionId);
+    });
+  }, DEBOUNCE_MS);
+  scheduled.set(ev.sessionId, { timer, controller });
+}
+
 export async function analyzeAndEmit(
   ws: WsLike,
   session: SessionState,
   ev: ChangeEvent,
   snapshotId: string,
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<void> {
   // Tee every ResultEvent to BOTH sinks (invariant 4): `send` → the CLI socket (immediate, unchanged)
   // AND a frame buffer flushed to `result_events` at frame end → WAL → Realtime → the web dashboard.
@@ -69,21 +102,47 @@ export async function analyzeAndEmit(
     const parentStored = await repo.getFindings(parentSnapshotId);
     const parentKeys = new Set(parentStored.map(repo.keyOfStored));
 
-    // Blast radius (incremental, invariant §16.5): the file(s) this event touched. Carry forward the
-    // parent's findings for every OTHER file so the score reflects the whole snapshot, not just the
-    // diff. (Import-graph dependents are M2.)
+    // Config-driven selection (M2B): which per-file + project analyzers, and which project tools are
+    // actually available on this engine (capability-probed; an absent tool degrades to a clean skip).
+    const { perFile, project } = selectAnalyzers(session.config);
+    const availableProject = [];
+    for (const a of project) {
+      if (signal.aborted) return; // superseded mid-probe
+      if (await a.isAvailable()) availableProject.push(a);
+    }
+    // Project (whole-tree) analyzers are AUTHORITATIVE for their dimensions this frame — those dims
+    // are fully replaced (never carried, never doubled from a per-file analyzer like gitleaks↔secrets).
+    const projectDims = new Set(availableProject.map((a) => a.dimension));
+
+    // Blast radius (incremental, invariant §16.5): the file(s) this event touched. Per-file analyzers
+    // run on the changed file; we carry forward the parent's per-file findings for every OTHER file so
+    // the score reflects the whole snapshot, not just the diff.
     const changed = new Set<string>([ev.path]);
     if (ev.oldPath) changed.add(ev.oldPath);
-    const carried = parentStored.filter((f) => !changed.has(f.file)).map(toFinding);
 
-    let fresh: Finding[] = [];
+    let perFileFresh: Finding[] = [];
     if (ev.op !== "delete") {
       const content = await readShadowFile(session.projectId, ev.path);
-      if (content !== null) fresh = runAnalyzers([{ path: ev.path, content }]);
+      if (content !== null) perFileFresh = runAnalyzers([{ path: ev.path, content }], perFile);
     }
-    const current = [...carried, ...fresh];
+    perFileFresh = perFileFresh.filter((f) => !projectDims.has(f.dimension));
+    const carried = parentStored
+      .filter((f) => !changed.has(f.file))
+      .map(toFinding)
+      .filter((f) => !projectDims.has(f.dimension)); // project dims come fresh whole-tree, not carried
 
-    const { scores, findings } = scoreSnapshot(current, parentScores, parentKeys, COVERED_DIMENSIONS);
+    const projectFindings = await runProjectAnalyzers(availableProject, {
+      rootDir: projectDir(session.projectId),
+      files: [...session.manifest.keys()],
+      changedPaths: [...changed],
+      config: session.config ?? ({} as ArcaneConfig),
+      signal,
+    });
+    if (signal.aborted) return; // a newer frame supersedes — don't persist/emit a stale one
+
+    const current = [...carried, ...perFileFresh, ...projectFindings];
+    const covered = coveredDimensions(perFile, availableProject);
+    const { scores, findings } = scoreSnapshot(current, parentScores, parentKeys, covered);
 
     // Persist (one transaction). ensureSession first so the source_snapshots FK resolves.
     await repo.ensureSession(ev.sessionId, session.projectId, session.baseSnapshotId);

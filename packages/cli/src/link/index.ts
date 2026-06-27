@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   LinkRequestSchema,
   LinkResponseSchema,
+  type ArcaneConfig,
   type GitContext,
   type ManifestFile,
 } from "@arcane/shared";
@@ -20,6 +21,7 @@ export interface LinkOptions {
   rules?: IgnoreRules; // the shared ignore matcher; built here from projectIgnore if omitted
   projectIgnore?: string[]; // arcane.toml [project].ignore, used only when `rules` is omitted
   git?: GitContext; // read-only git context attached to the link body (§3A.5); omitted in metadata-only
+  config?: ArcaneConfig; // validated arcane.toml uploaded so the cloud can select analyzers (M2B)
 }
 
 export async function link(
@@ -47,7 +49,11 @@ export async function link(
     files.push(file);
   }
 
-  const body = LinkRequestSchema.parse({ files, ...(opts.git ? { git: opts.git } : {}) });
+  const body = LinkRequestSchema.parse({
+    files,
+    ...(opts.git ? { git: opts.git } : {}),
+    ...(opts.config ? { config: opts.config } : {}),
+  });
   const res = await fetch(`${httpBase}/link`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },

@@ -5,15 +5,16 @@ import {
   type AckEvent,
   type GitContext,
 } from "@arcane/shared";
-import { analyzeAndEmit } from "./pipeline";
+import { scheduleAnalysis } from "./pipeline";
 import type { SessionStore } from "./session-store";
 import { applyToShadow } from "./shadow-worktree";
 
 // Server pipeline ingest (Technical-Spec §3B.1): validate · seq-check · apply patch to the shadow
-// worktree · ack · analyze. M1C completes the pipe: after an in-order apply is acked, the real
-// analysis pipeline (pipeline.ts) runs the analyzers, scores, persists, and streams `finding`/
-// `score`/`state` events. The ack still goes out BEFORE analysis (the "well under a second" gate,
-// §6 E1); analysis is awaited in the per-connection chain so applies/analyses can't race.
+// worktree · ack · analyze. After an in-order apply is acked, the analysis pipeline (pipeline.ts)
+// runs the analyzers, scores, persists, and streams `finding`/`score`/`state` events. The ack goes
+// out BEFORE analysis (the "well under a second" gate, §6 E1); analysis is then SCHEDULED (debounced
+// per session, M2B) so a burst coalesces to the latest tree state — applies stay serialized on the
+// per-connection chain, analysis rides behind the ack.
 
 // A structural view of a Bun ServerWebSocket — keeps ingest decoupled + unit-testable.
 export interface WsLike {
@@ -87,10 +88,10 @@ export async function handleIngest(
     console.log(
       `← seq=${ev.seq} ${ev.op} ${ev.path} → applied · ack ackSeq=${ev.seq} snapshot=${snapshotId.slice(0, 8)}`,
     );
-    // Analyze the just-applied snapshot and stream real findings/scores (§3B.1). Awaited in the
-    // per-connection chain (index.ts) so the next event can't race this snapshot's analysis; the
-    // ack above already went out, so the round-trip stays fast.
-    await analyzeAndEmit(ws, session, ev, snapshotId);
+    // Analyze the just-applied snapshot and stream real findings/scores (§3B.1). Debounced per
+    // session (M2B) so a burst coalesces to the latest tree state before the whole-tree project
+    // analyzers run; the ack above already went out, so the round-trip stays fast.
+    scheduleAnalysis(ws, session, ev, snapshotId);
   } else if (ev.seq <= session.appliedSeq) {
     // Duplicate / retry (§3A.3): a resent event the server already applied. No-op, but re-ack so the
     // CLI drops it from the journal. Dedup is by contiguous seq — durable client seq makes a NEW

@@ -51,6 +51,7 @@ async function linkCmd(target: string): Promise<void> {
     const info = await link(root, cloudHttpBase(), token, {
       projectIgnore: loaded?.config.project?.ignore,
       git: metadataOnly ? undefined : await readGitContext(root, loaded?.config.baseline?.ref),
+      config: loaded?.config,
     });
     console.log(`✓ linked ${root}`);
     console.log(`  project       ${info.projectId}`);
@@ -191,6 +192,7 @@ async function watch(target: string, noColor: boolean): Promise<void> {
       session = await link(root, httpBase, token, {
         rules,
         git: metadataOnly ? undefined : await readGitContext(root, baselineRef),
+        config: loaded?.config,
       });
       journal = new Journal(root, session.sessionId, session.baseSnapshotId);
       store.setJournalDepth(journal.depth());
@@ -294,6 +296,7 @@ async function sendtest(target: string): Promise<void> {
   const info = await link(root, httpBase, token, {
     projectIgnore: loaded?.config.project?.ignore,
     git: metadataOnly ? undefined : await readGitContext(root, loaded?.config.baseline?.ref),
+    config: loaded?.config,
   });
   console.log(
     `→ linked project ${info.projectId.slice(0, 8)} (baseSnapshot ${info.baseSnapshotId.slice(0, 8)})`,

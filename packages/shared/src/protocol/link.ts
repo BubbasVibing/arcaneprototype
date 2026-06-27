@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ArcaneConfigSchema } from "../domain/config";
 import { BlobRefSchema, EncodingSchema } from "./change-event";
 import { GitContextSchema } from "./git-context";
 
@@ -31,6 +32,9 @@ export const LinkRequestSchema = z.object({
   // when the root isn't a git repo. The server stores it on the project baseline (M2A); the
   // delta-first engine that consumes it is later.
   git: GitContextSchema.optional(),
+  // The validated arcane.toml (§12). Optional: omitted when the repo has no arcane.toml. The cloud
+  // uses it to select + configure analyzers (M2B). Not source — sent in all source-access modes.
+  config: ArcaneConfigSchema.optional(),
 });
 export type LinkRequest = z.infer<typeof LinkRequestSchema>;
 

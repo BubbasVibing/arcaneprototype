@@ -28,7 +28,12 @@ export async function handleLink(req: Request, store: SessionStore): Promise<Res
   const projectId = randomUUID(); // projects.id (§7)
   const manifest = await materializeBaseline(projectId, parsed.data.files);
   const baseSnapshotId = randomUUID(); // source_snapshots.id (§7) — minted, not content-derived
-  await store.registerBaseline(projectId, { manifest, baseSnapshotId, git: parsed.data.git });
+  await store.registerBaseline(projectId, {
+    manifest,
+    baseSnapshotId,
+    git: parsed.data.git,
+    config: parsed.data.config,
+  });
 
   // Persist the project (→ dev org) + baseline snapshot/manifest (D2b/D2a).
   await ensureProject(projectId, `arcane-${projectId.slice(0, 8)}`);
