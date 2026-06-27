@@ -1,0 +1,74 @@
+# Arcane project config — illustrative copy of Product-Requirements §4.1.
+# This is the human-facing shape of `arcane.toml`; the `ArcaneConfig` zod schema in
+# @arcane/shared (packages/shared/src/domain/config.ts) is the validation contract.
+# Nothing in Session 0 parses this file yet (no config loader until A1) — it's here so the
+# example and the schema are checked into the repo together.
+
+# ── General ──
+[project]
+languages = ["ts", "js"]          # detected if omitted
+ignore    = ["dist", "node_modules", ".arcane"]
+
+[ui]
+theme   = "auto"                   # auto | dark | light
+density = "summary"                # summary | full  (default detail level; NOT a beginner/pro mode)
+accent  = "violet"
+
+# ── Scoring & analyzers (analyzers run in Arcane Cloud; this just configures them) ──
+[score]
+weights = { quality = 1.0, security = 1.5, performance = 1.0, maintainability = 1.0 }
+
+[analyzers]
+enabled  = ["complexity", "escape-hatch", "semgrep", "knip", "gitleaks", "osv"]
+disabled = []
+[analyzers.complexity]
+max_cyclomatic = 15
+[analyzers.thresholds]
+quality = 70                       # bar turns amber/red below thresholds
+
+# ── Baseline / delta ──
+[baseline]
+ref = "origin/main"                # delta-first: only NEW findings vs this ref are surfaced
+
+# ── Execution (OFF by default; runs in Arcane Cloud's isolated sandbox; gates the Runtime Delta Engine) ──
+[execution]
+enabled            = false         # master switch — nothing runs unless true
+require_permission = true          # prompt before each run (allow once/session/always/deny)
+allow_in_ci        = false         # CI must opt in explicitly (or pass --yes)
+isolation          = "microvm"     # cloud runner isolation: microvm | container
+timeout_ms         = 30000         # watchdog SIGKILL on overrun
+network            = "deny"        # deny | replay | allow(only with explicit grant)
+
+# Declaring a workload ≠ permission to run it (still gated by [execution]).
+[[workload]]
+name       = "unit-tests"
+command    = "npm test"
+type       = "test"                # test | server | benchmark | function
+auto_grant = false                 # true = skip the prompt for THIS workload only
+
+[[workload]]
+name       = "api-smoke"
+command    = "npm run arcane:smoke"
+type       = "server"
+inputs     = "fixtures"            # tests | fixtures | zod | openapi | recorded | sample
+perf_budget = { p95_ms = 200 }     # optional regression budget for the gate
+
+# ── AI (opt-in, budgeted; runs in the cloud) ──
+[ai]
+enabled      = false
+judge_model  = "claude-opus-4-8"
+triage_model = "claude-haiku-4-5"
+daily_budget_usd = 2.00
+batch_in_ci  = true                # use Batch API (50% off) for gate/nightly
+
+# ── Gate (CI) ──
+[gate]
+gate_on = ["security", "performance"]   # which dimensions block a merge
+fail_on = "new-regressions"             # never the legacy backlog
+
+# ── Cloud (source-access mode — how Arcane gets your code) ──
+[cloud]
+mode           = "cloud"           # cloud | metadata-only | self-host
+endpoint       = ""                # self-host engine URL (mode = self-host)
+ephemeral      = false             # cloud mode: analyze-and-discard, persist results only
+share_presence = false             # publish branch names + health to teammates (NEVER code)

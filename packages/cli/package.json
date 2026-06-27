@@ -1,0 +1,33 @@
+{
+  "name": "@arcane/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "arcane": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@arcane/shared": "*",
+    "chokidar": "^4.0.3",
+    "ink": "^5.1.0",
+    "react": "^18.3.1",
+    "ws": "^8.18.0",
+    "xxhash-wasm": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/ws": "^8.5.13"
+  }
+}

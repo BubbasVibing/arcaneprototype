@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# arcane local state (CLI token, journal) — never committed
+.arcane/
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# logs / os
+*.log
+.DS_Store
+
+# bun (the cloud is run via root npm install + `bun run`; a stray bun.lockb here
+# would compete with the npm workspace install — see plan §6 / E1 migration)
+bun.lockb

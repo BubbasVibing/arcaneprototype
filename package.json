@@ -1,0 +1,27 @@
+{
+  "name": "arcane",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w @arcane/shared",
+    "build": "npm run build -w @arcane/shared && npm run build -w @arcane/cli",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "cloud": "npm run start -w @arcane/cloud",
+    "roundtrip": "node packages/cli/dist/cli.js sendtest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
