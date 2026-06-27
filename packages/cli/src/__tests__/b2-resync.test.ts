@@ -20,9 +20,14 @@ import { WsClient } from "../transport/ws-client";
 // seq-gap (Gate 2: gap → resyncFrom → recovery), duplicate no-op, and the manifest-resync fallback.
 // Assertions verify by RE-HASHING both manifests — drift can hide behind a matching ackSeq.
 
+// GATED ON DATABASE_URL (M1C): the cloud now fails fast without Postgres (plan D3), so this
+// full-stack resync test only runs when DATABASE_URL points at a MIGRATED database; otherwise it
+// skips. The resync/ack logic it guards is unchanged from M1B — analysis just rides alongside it.
+
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../../..");
 const cloudEntry = join(repoRoot, "services/cloud/src/index.ts");
+const HAS_DB = Boolean(process.env.DATABASE_URL);
 
 let proc: ChildProcess;
 let port = 0;
@@ -106,6 +111,7 @@ async function setupProject(): Promise<{ fixture: string; info: LinkInfo }> {
 }
 
 beforeAll(async () => {
+  if (!HAS_DB) return; // skipped suite — don't spawn the cloud
   port = await freePort();
   shadowRoot = mkdtempSync(join(tmpdir(), "arcane-b2-shadow-"));
   proc = spawn("bun", ["run", cloudEntry], {
@@ -136,7 +142,7 @@ afterAll(() => {
   if (shadowRoot) rmSync(shadowRoot, { recursive: true, force: true });
 });
 
-it("Gate 1: disconnect → kill+restart CLI (durable seq) → reconnect-replay, no drift", async () => {
+it.skipIf(!HAS_DB)("Gate 1: disconnect → kill+restart CLI (durable seq) → reconnect-replay, no drift", async () => {
   const { fixture, info } = await setupProject();
 
   // Old CLI process: stream seq 1,2 and drain.
@@ -196,7 +202,7 @@ it("Gate 1: disconnect → kill+restart CLI (durable seq) → reconnect-replay, 
   rmSync(fixture, { recursive: true, force: true });
 });
 
-it("Gate 2: forced seq-gap → resyncFrom → journal replay recovers; duplicate is a no-op", async () => {
+it.skipIf(!HAS_DB)("Gate 2: forced seq-gap → resyncFrom → journal replay recovers; duplicate is a no-op", async () => {
   const { fixture, info } = await setupProject();
   const j = new Journal(fixture, info.sessionId, info.baseSnapshotId);
   const acks: AckEvent[] = [];
@@ -253,7 +259,7 @@ it("Gate 2: forced seq-gap → resyncFrom → journal replay recovers; duplicate
   rmSync(fixture, { recursive: true, force: true });
 });
 
-it("manifest resync: when the journal can't replay, diff the server manifest vs disk and re-emit", async () => {
+it.skipIf(!HAS_DB)("manifest resync: when the journal can't replay, diff the server manifest vs disk and re-emit", async () => {
   const { fixture, info } = await setupProject();
   const j = new Journal(fixture, info.sessionId, info.baseSnapshotId);
   let ws!: WsClient;

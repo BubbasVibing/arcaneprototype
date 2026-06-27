@@ -20,15 +20,20 @@ import { Journal } from "../journal";
 import { link } from "../link";
 import { WsClient } from "../transport/ws-client";
 
-// Integration test (M1B): spin the REAL Bun gateway on an ephemeral port and drive the full ingest
-// round-trip — POST /auth/token → POST /link → WS /ingest one ChangeEvent — asserting the server
-// APPLIES it to the shadow worktree, ACKs the contiguous seq, and still echoes the `state` phase
-// walk. This is the automated form of the B1 happy-path proof. Requires `bun` on PATH.
+// Integration test (M1B→M1C): spin the REAL Bun gateway on an ephemeral port and drive the full
+// ingest round-trip — POST /auth/token → POST /link → WS /ingest one ChangeEvent — asserting the
+// server APPLIES it to the shadow worktree, ACKs the contiguous seq, and streams the real M1C
+// analysis phase walk. Requires `bun` on PATH.
+//
+// GATED ON DATABASE_URL (M1C): the cloud now fails fast without Postgres (plan D3), so this
+// full-stack test only runs when DATABASE_URL points at a MIGRATED database; otherwise it skips
+// (the analyzer/score/store unit tests + the manual proof cover the logic).
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../../..");
 const cloudEntry = join(repoRoot, "services/cloud/src/index.ts");
 const DEV_TOKEN = "dev-stub-token";
+const HAS_DB = Boolean(process.env.DATABASE_URL);
 
 let proc: ChildProcess;
 let port = 0;
@@ -51,6 +56,7 @@ function freePort(): Promise<number> {
 }
 
 beforeAll(async () => {
+  if (!HAS_DB) return; // skipped suite — don't spawn the cloud
   port = await freePort();
   shadowRoot = mkdtempSync(join(tmpdir(), "arcane-shadow-"));
   proc = spawn("bun", ["run", cloudEntry], {
@@ -77,7 +83,7 @@ afterAll(() => {
   if (shadowRoot) rmSync(shadowRoot, { recursive: true, force: true });
 });
 
-it("links, applies + acks one ChangeEvent, and echoes the state walk (M1B ingest)", async () => {
+it.skipIf(!HAS_DB)("links, applies + acks one ChangeEvent, and streams the analysis walk", async () => {
   const httpBase = `http://127.0.0.1:${port}`;
 
   // 1. STUB auth → dev token.
@@ -148,8 +154,8 @@ it("links, applies + acks one ChangeEvent, and echoes the state walk (M1B ingest
   expect(result.ack.ackSeq).toBe(1);
   expect(result.ack.acceptedEventIds).toContain(eventId);
   expect(result.ack.serverSnapshotId).toMatch(/^[0-9a-f-]{36}$/);
-  // The pipeline walk still streams in order, ending at `done` (§3B.1).
-  expect(result.phases).toEqual(["detected", "uploading", "queued", "analyzing", "results", "done"]);
+  // M1C: the in-order branch streams the REAL analysis walk — analyzing → results → done (§3B.1).
+  expect(result.phases).toEqual(["analyzing", "results", "done"]);
 
   // The server applied the op to its shadow worktree (no drift): the manifest holds the file's hash.
   const dbg = await fetch(`${httpBase}/debug/session?sessionId=${sessionId}`);
@@ -158,7 +164,7 @@ it("links, applies + acks one ChangeEvent, and echoes the state walk (M1B ingest
   expect(state.files["src/it.ts"]).toBe("deadbeefdeadbeef");
 });
 
-it("drives the real CLI journal + WsClient: acks drain the journal and the shadow matches (no drift)", async () => {
+it.skipIf(!HAS_DB)("drives the real CLI journal + WsClient: acks drain the journal and the shadow matches (no drift)", async () => {
   const httpBase = `http://127.0.0.1:${port}`;
   await initHasher();
 

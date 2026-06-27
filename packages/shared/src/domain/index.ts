@@ -1,4 +1,5 @@
 export * from "./dimension";
+export * from "./category";
 export * from "./finding";
 export * from "./metric";
 export * from "./score";

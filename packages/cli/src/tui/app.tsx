@@ -1,14 +1,16 @@
 import { Box, Text, useApp, useInput } from "ink";
 import { useState, useSyncExternalStore } from "react";
 import { ChangeLog } from "./components/ChangeLog";
+import { Findings } from "./components/Findings";
 import { Footer } from "./components/Footer";
 import { Help } from "./components/Help";
 import { PipelineState } from "./components/PipelineState";
+import { Scores } from "./components/Scores";
 import type { Store } from "./store";
 
-// Root Ink component. Renders the session pipeline stepper + the ordered change log, and wires
-// the §8 M1A keybindings. Keys for not-yet-built features render but report "not available in
-// this milestone" (mirrors the command-stub rule). Honors NO_COLOR via the `noColor` prop.
+// Root Ink component. Renders the session pipeline stepper, per-dimension score bars (`d`), the
+// findings list, and the ordered change log, wiring the §8 keybindings. Keys for not-yet-built
+// features render but report "not available in this milestone". Honors NO_COLOR via `noColor`.
 
 export interface AppProps {
   store: Store;
@@ -16,9 +18,9 @@ export interface AppProps {
   onQuit: () => void;
 }
 
-// Keys whose features don't exist in M1A — they render the action but are gated (§8).
+// Keys whose features don't exist yet — they render the action but are gated (§8). `d` is now live
+// (toggles the score panel, handled below), so it left this list in M1C.
 const NOT_AVAILABLE: Record<string, string> = {
-  d: "per-dimension bars",
   L: "sign-in",
   e: "explain (AI)",
   f: "verified fix",
@@ -97,6 +99,11 @@ export function App({ store, noColor, onQuit }: AppProps) {
       setExpanded((e) => !e);
       return;
     }
+    if (input === "d") {
+      setNotice(null);
+      store.toggleScores(); // §8 — show/hide the per-dimension score bars
+      return;
+    }
 
     const na = NOT_AVAILABLE[input];
     if (na) setNotice(`${na}: not available in this milestone`);
@@ -111,6 +118,8 @@ export function App({ store, noColor, onQuit }: AppProps) {
         </Text>
       </Box>
       <PipelineState phase={state.phase} noColor={noColor} />
+      {state.showScores ? <Scores scores={state.scores} noColor={noColor} /> : null}
+      <Findings findings={state.findings} noColor={noColor} />
       <ChangeLog events={filtered} selected={sel} expanded={expanded} noColor={noColor} />
       {helpOpen ? <Help noColor={noColor} /> : null}
       <Footer

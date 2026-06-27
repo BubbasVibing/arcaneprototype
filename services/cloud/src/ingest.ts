@@ -1,20 +1,13 @@
-import {
-  AckEventSchema,
-  ChangeEventSchema,
-  ResultEventSchema,
-  type AckEvent,
-  type ResultEvent,
-  type ResultPhase,
-} from "@arcane/shared";
+import { AckEventSchema, ChangeEventSchema, type AckEvent } from "@arcane/shared";
+import { analyzeAndEmit } from "./pipeline";
 import type { SessionStore } from "./session-store";
 import { applyToShadow } from "./shadow-worktree";
 
 // Server pipeline ingest (Technical-Spec §3B.1): validate · seq-check · apply patch to the shadow
-// worktree · ack. M1B STOPS after apply — no blast radius, queue, analyzers, or score (M1C). The
-// `state` phase walk is still emitted so the round-trip stays legible (invariant §16.10).
-//
-// B1 implements the IN-ORDER branch only (seq == appliedSeq + 1). The duplicate (seq <= appliedSeq)
-// and gap (seq > appliedSeq + 1 → resyncFrom) branches are B2.
+// worktree · ack · analyze. M1C completes the pipe: after an in-order apply is acked, the real
+// analysis pipeline (pipeline.ts) runs the analyzers, scores, persists, and streams `finding`/
+// `score`/`state` events. The ack still goes out BEFORE analysis (the "well under a second" gate,
+// §6 E1); analysis is awaited in the per-connection chain so applies/analyses can't race.
 
 // A structural view of a Bun ServerWebSocket — keeps ingest decoupled + unit-testable.
 export interface WsLike {
@@ -22,26 +15,9 @@ export interface WsLike {
   readyState: number;
 }
 
-const PHASES: ResultPhase[] = ["detected", "uploading", "queued", "analyzing", "results", "done"];
-const PHASE_DELAY_MS = 120; // visible pacing for the demo, not a real latency model
-
 function sendAck(ws: WsLike, ack: AckEvent): void {
   AckEventSchema.parse(ack); // self-check the contract before it goes on the wire
   ws.send(JSON.stringify(ack));
-}
-
-// Fire-and-forget the cosmetic pipeline walk. NOT awaited by the ingest critical section, so it
-// never delays the ack or the next event's apply (the "well under a second" gate, §6 E1).
-async function emitStateWalk(ws: WsLike, sessionId: string): Promise<void> {
-  let first = true;
-  for (const phase of PHASES) {
-    if (!first) await Bun.sleep(PHASE_DELAY_MS);
-    first = false;
-    if (ws.readyState !== 1) return; // client disconnected mid-walk — stop quietly
-    const state: ResultEvent = { kind: "state", sessionId, phase };
-    ResultEventSchema.parse(state); // self-check the contract before sending
-    ws.send(JSON.stringify(state));
-  }
 }
 
 // Handle ONE inbound frame. Call this serialized per connection (see index.ts) so concurrent frames
@@ -93,6 +69,10 @@ export async function handleIngest(
     console.log(
       `← seq=${ev.seq} ${ev.op} ${ev.path} → applied · ack ackSeq=${ev.seq} snapshot=${snapshotId.slice(0, 8)}`,
     );
+    // Analyze the just-applied snapshot and stream real findings/scores (§3B.1). Awaited in the
+    // per-connection chain (index.ts) so the next event can't race this snapshot's analysis; the
+    // ack above already went out, so the round-trip stays fast.
+    await analyzeAndEmit(ws, session, ev, snapshotId);
   } else if (ev.seq <= session.appliedSeq) {
     // Duplicate / retry (§3A.3): a resent event the server already applied. No-op, but re-ack so the
     // CLI drops it from the journal. Dedup is by contiguous seq — durable client seq makes a NEW
@@ -119,6 +99,6 @@ export async function handleIngest(
       `⋯ gap seq=${ev.seq} (expected ${session.appliedSeq + 1}) — resyncFrom=${session.appliedSeq + 1}`,
     );
   }
-
-  void emitStateWalk(ws, ev.sessionId); // detached — legibility only, never blocks the ack
+  // Duplicate/gap branches do not analyze: a duplicate re-acks an already-analyzed snapshot, and a
+  // gap is healed by a resync (no new snapshot). Only the in-order branch runs analyzeAndEmit.
 }

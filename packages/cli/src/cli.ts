@@ -84,13 +84,23 @@ async function watch(target: string, noColor: boolean): Promise<void> {
     conn: "connecting",
     journalDepth: journal.depth(),
     resync: false,
+    scores: [],
+    findings: [],
+    showScores: true,
   });
 
   const ws = new WsClient({
     url: cloudWsIngest(token),
     onResult: (ev) => {
-      // M1B: the gateway echoes session-scoped `state` events; drive the pipeline stepper.
-      if (ev.kind === "state") store.setPhase(ev.phase);
+      // M1C: the gateway streams `state` (pipeline stepper), plus real `score` + `finding` events.
+      if (ev.kind === "state") {
+        if (ev.phase === "analyzing") store.beginFrame(); // open a fresh result frame
+        store.setPhase(ev.phase);
+      } else if (ev.kind === "score") {
+        store.upsertScore({ dimension: ev.dimension, value: ev.value, delta: ev.delta });
+      } else if (ev.kind === "finding") {
+        store.addFinding(ev.finding, ev.isNew);
+      }
     },
     onOpen: () => {
       // (Re)connected: replay the unacked tail so the server catches up (dups absorbed, §3A.3).

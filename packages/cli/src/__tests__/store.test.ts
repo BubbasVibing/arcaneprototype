@@ -1,10 +1,10 @@
-import type { ChangeEvent } from "@arcane/shared";
+import type { ChangeEvent, Finding } from "@arcane/shared";
 import { describe, expect, it, vi } from "vitest";
 import { Store } from "../tui/store";
 
 // Regression guard on the render-data path: the Store bridges (non-React) Collector + WsClient
 // events into the Ink tree via useSyncExternalStore. The Ink rendering itself is verified by eye
-// (hard to assert), but the event → snapshot flow that M1B will touch is covered here.
+// (hard to assert), but the event → snapshot flow that M1B/M1C touch is covered here.
 
 function makeStore() {
   return new Store({
@@ -15,7 +15,24 @@ function makeStore() {
     conn: "connecting",
     journalDepth: 0,
     resync: false,
+    scores: [],
+    findings: [],
+    showScores: true,
   });
+}
+
+function finding(over: Partial<Finding> = {}): Finding {
+  return {
+    id: "f1",
+    dimension: "complexity",
+    severity: "medium",
+    ruleId: "complexity/cyclomatic",
+    message: "m",
+    file: "a.ts",
+    range: { startLine: 1, startCol: 1, endLine: 2, endCol: 1 },
+    fixable: false,
+    ...over,
+  };
 }
 
 const sampleEvent: ChangeEvent = {
@@ -77,5 +94,39 @@ describe("tui Store", () => {
   it("returns a stable snapshot reference between reads with no mutation", () => {
     const store = makeStore();
     expect(store.getSnapshot()).toBe(store.getSnapshot());
+  });
+
+  it("upsertScore replaces a dimension in place and keeps scores sorted (M1C)", () => {
+    const store = makeStore();
+    store.upsertScore({ dimension: "secrets", value: 70, delta: -30 });
+    store.upsertScore({ dimension: "complexity", value: 92, delta: -8 });
+    store.upsertScore({ dimension: "complexity", value: 78, delta: -22 }); // replace, not append
+    const { scores } = store.getSnapshot();
+    expect(scores.map((s) => s.dimension)).toEqual(["complexity", "secrets"]); // sorted
+    expect(scores.find((s) => s.dimension === "complexity")?.value).toBe(78);
+  });
+
+  it("beginFrame clears stale findings so a new analysis frame is a clean set (M1C)", () => {
+    const store = makeStore();
+    store.addFinding(finding(), true);
+    store.addFinding(finding({ id: "f2" }), false);
+    expect(store.getSnapshot().findings).toHaveLength(2);
+    store.beginFrame();
+    expect(store.getSnapshot().findings).toHaveLength(0);
+  });
+
+  it("addFinding records the is_new verdict for rendering the NEW tag (M1C)", () => {
+    const store = makeStore();
+    store.addFinding(finding(), true);
+    const row = store.getSnapshot().findings[0];
+    expect(row?.isNew).toBe(true);
+    expect(row?.dimension).toBe("complexity");
+  });
+
+  it("toggleScores flips the score-panel visibility (the `d` key, M1C)", () => {
+    const store = makeStore();
+    expect(store.getSnapshot().showScores).toBe(true);
+    store.toggleScores();
+    expect(store.getSnapshot().showScores).toBe(false);
   });
 });

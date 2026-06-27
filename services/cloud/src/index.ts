@@ -4,12 +4,12 @@ import { handleLink } from "./link";
 import { InMemorySessionStore } from "./session-store";
 import { manifestHash } from "./shadow-worktree";
 
-// Arcane Cloud — M1B REAL ingestion gateway (Build Guide §6 Lane E, the M1B sub-step). Turns the
-// M1A stub into real cloud ingestion: a stub-token session, `arcane link` materializing a shadow
-// worktree, streamed ChangeEvents applied to that worktree and acked, the `state` walk still echoed.
-// NO analyzers, score engine, queue, sandbox, AI, or Postgres here — analysis + persistence are
-// M1C (§3B.1). State is IN MEMORY (persistence deferred per the M1B decision); the shadow worktree
-// is on the server filesystem. Run with Bun.
+// Arcane Cloud — M1C analysis gateway (Build Guide §6 Lane E). On top of M1B's real ingestion
+// (stub-token session, `arcane link` shadow worktree, ordered apply + acks) it now runs the real
+// pipeline: an applied ChangeEvent is analyzed (complexity in C1), scored per dimension, persisted
+// to Postgres, and streamed back as `finding`/`score`/`state` events (§3B.1). The SYNC cursor stays
+// IN MEMORY (InMemorySessionStore); RESULTS persist to Postgres (db/*). No queue/sandbox/AI yet.
+// Run with Bun; requires DATABASE_URL (see .env.example) — db/client.ts fails fast without it.
 
 const store = new InMemorySessionStore();
 const port = Number(process.env.PORT ?? 8787);
@@ -90,4 +90,4 @@ const server = Bun.serve<IngestConn>({
   },
 });
 
-console.log(`Arcane Cloud (M1B) listening on http://127.0.0.1:${server.port}  (ws path: /ingest)`);
+console.log(`Arcane Cloud (M1C) listening on http://127.0.0.1:${server.port}  (ws path: /ingest)`);

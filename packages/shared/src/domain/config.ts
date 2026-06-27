@@ -1,15 +1,15 @@
 import { z } from "zod";
+import { CategorySchema } from "./category";
 
 // ArcaneConfig — the validation contract for `arcane.toml`.
 // Authoritative human-facing shape: Product-Requirements §4.1. Cloud-validation rules: §12
 // (unknown keys rejected via .strict(); `[cloud].endpoint` required iff mode = "self-host").
 // The CLI parses `arcane.toml` with smol-toml and uploads it; the cloud validates against this.
-// (Nothing in Session 0 loads a real config yet — the schema is locked now, not consumed.)
 //
-// NOTE (plan §6): `[score].weights`, `[analyzers].thresholds`, and `[gate].gate_on` use a coarse
-// category vocabulary (quality/security/performance/maintainability) in §4.1 that does NOT match
-// the fine-grained `Dimension` enum (§5). They are typed permissively here until that mapping is
-// reconciled (before the score engine, M1C) — we do not guess a mapping.
+// M1C/D1: `[score].weights`, `[analyzers].thresholds`, and `[gate].gate_on` speak the COARSE
+// category vocabulary (quality/security/performance/maintainability, §4.1). That clash with the
+// fine-grained `Dimension` enum (§5) is now reconciled — the bridge lives in `./category`, and
+// these three fields are keyed/typed to `CategorySchema` (unknown categories are rejected).
 
 const ProjectSchema = z
   .object({
@@ -28,7 +28,7 @@ const UiSchema = z
 
 const ScoreConfigSchema = z
   .object({
-    weights: z.record(z.number()).optional(),
+    weights: z.record(CategorySchema, z.number()).optional(),
   })
   .strict();
 
@@ -37,7 +37,7 @@ const AnalyzersSchema = z
     enabled: z.array(z.string()).optional(),
     disabled: z.array(z.string()).optional(),
     complexity: z.object({ max_cyclomatic: z.number().int().optional() }).strict().optional(),
-    thresholds: z.record(z.number()).optional(),
+    thresholds: z.record(CategorySchema, z.number()).optional(),
   })
   .strict();
 
@@ -77,7 +77,7 @@ const AiSchema = z
 
 const GateSchema = z
   .object({
-    gate_on: z.array(z.string()).optional(),
+    gate_on: z.array(CategorySchema).optional(),
     fail_on: z.string().optional(),
   })
   .strict();

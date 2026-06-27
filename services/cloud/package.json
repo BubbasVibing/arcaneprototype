@@ -6,10 +6,13 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun run --watch src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "migrate": "bun run src/scripts/migrate.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
-    "@arcane/shared": "*"
+    "@arcane/shared": "*",
+    "typescript": "^5.7.2"
   },
   "devDependencies": {
     "@types/bun": "^1.2.16"
