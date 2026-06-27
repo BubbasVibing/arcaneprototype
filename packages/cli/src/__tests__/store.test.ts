@@ -13,14 +13,15 @@ function makeStore() {
     events: [],
     phase: null,
     conn: "connecting",
+    journalDepth: 0,
   });
 }
 
 const sampleEvent: ChangeEvent = {
   eventId: "00000000-0000-0000-0000-0000000000bb",
   sessionId: "00000000-0000-0000-0000-0000000000aa",
-  projectId: "project-0",
-  parentSnapshotId: "snapshot-0",
+  projectId: "00000000-0000-0000-0000-0000000000c0",
+  parentSnapshotId: "00000000-0000-0000-0000-0000000000d2",
   seq: 1,
   ts: 1,
   op: "add",
@@ -47,6 +48,17 @@ describe("tui Store", () => {
     store.setConn("open");
     expect(store.getSnapshot().conn).toBe("open");
     expect(store.getSnapshot().phase).toBe("analyzing"); // unaffected
+  });
+
+  it("setJournalDepth updates the badge and no-ops when unchanged", () => {
+    const store = makeStore();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    store.setJournalDepth(3);
+    expect(store.getSnapshot().journalDepth).toBe(3);
+    expect(listener).toHaveBeenCalledTimes(1);
+    store.setJournalDepth(3); // same value → no re-render
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 
   it("notifies subscribers on change and stops after unsubscribe", () => {

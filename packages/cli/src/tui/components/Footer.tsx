@@ -20,12 +20,14 @@ const CONN_COLOR: Record<ConnState, string> = {
 
 export function Footer({
   conn,
+  journalDepth,
   filtering,
   filter,
   notice,
   noColor,
 }: {
   conn: ConnState;
+  journalDepth: number;
   filtering: boolean;
   filter: string;
   notice: string | null;
@@ -36,6 +38,11 @@ export function Footer({
     <Box justifyContent="space-between">
       <Box>
         <Text color={noColor ? undefined : CONN_COLOR[conn]}>● {CONN_LABEL[conn]}</Text>
+        {journalDepth > 0 ? (
+          <Text color={noColor ? undefined : "yellow"}>
+            {"  "}unacked: {journalDepth}
+          </Text>
+        ) : null}
         {filtering || filter ? (
           <Text color={dim}>
             {"  "}filter: <Text color={noColor ? undefined : "cyan"}>{filter || "…"}</Text>

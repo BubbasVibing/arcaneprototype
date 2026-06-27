@@ -1,0 +1,6 @@
+# M1B shadow worktrees — per-project applied-files dirs the gateway materializes (server-local,
+# never committed). Reaping ended/orphaned project dirs is M1C/M2 debt.
+.arcane-shadow/
+
+# Local env (dev token, port). Commit .env.example, not .env.
+.env

@@ -1,38 +1,98 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { ChangeEventSchema, ResultEventSchema, type ChangeEvent } from "@arcane/shared";
+import { ChangeEventSchema, type ChangeEvent } from "@arcane/shared";
 import { WebSocket } from "ws";
+import { login, readToken } from "./auth/token";
+import { cloudHttpBase, cloudWsIngest } from "./cloud";
 import { Collector } from "./collector";
-import { makeSession } from "./session";
+import { hashBuffer, initHasher } from "./collector/hash";
+import { Journal } from "./journal";
+import { link } from "./link";
+import { loadSession, type LinkInfo } from "./session";
 import { WsClient } from "./transport/ws-client";
 import { mountTui } from "./tui/render";
 import { Store } from "./tui/store";
 
 // @arcane/cli — the thin client (Build Guide Lane A). It NEVER analyzes or runs user code
-// (invariant §16.1): it watches a repo, normalizes ORDERED ChangeEvents (§3A), streams them over
-// ws, and renders the cloud's pipeline `state` in an Ink TUI. M1A commands: `watch` (and bare
-// `arcane`) + the Session-0 `sendtest`. Everything else is "not available in this milestone".
+// (invariant §16.1): it watches a repo, normalizes ORDERED ChangeEvents (§3A), streams them over a
+// token-gated WS to the cloud, journals them until acked (§3A.3), and renders the cloud's pipeline
+// `state` in an Ink TUI. M1B commands: `login`, `link`, `watch` (bare `arcane` = watch the cwd), and
+// the `sendtest` one-shot. Everything else is "not available in this milestone".
 
-const CLOUD_URL = process.env.ARCANE_CLOUD_URL ?? "ws://127.0.0.1:8787";
+// --- `arcane login` — STUB auth: fetch the dev token, store in ~/.arcane (§18) ---
 
-// --- `arcane watch [path]` — the real collector → stub gateway → TUI loop (M1A) ---
+async function loginCmd(): Promise<void> {
+  try {
+    await login(cloudHttpBase());
+    console.log("✓ logged in (token saved to ~/.arcane)");
+  } catch (err) {
+    console.error(`✗ ${(err as Error).message}`);
+    console.error("  is the cloud running? start it with: npm run cloud");
+    process.exit(1);
+  }
+}
+
+// --- `arcane link [path]` — establish a project + baseSnapshot for the shadow worktree (§3A.4) ---
+
+async function linkCmd(target: string): Promise<void> {
+  const root = resolve(target);
+  const token = readToken();
+  if (!token) {
+    console.error("✗ not logged in — run `arcane login` first");
+    process.exit(1);
+  }
+  try {
+    const info = await link(root, cloudHttpBase(), token);
+    console.log(`✓ linked ${root}`);
+    console.log(`  project       ${info.projectId}`);
+    console.log(`  baseSnapshot  ${info.baseSnapshotId}`);
+    console.log("  run `arcane watch` to start streaming changes");
+  } catch (err) {
+    console.error(`✗ ${(err as Error).message}`);
+    process.exit(1);
+  }
+}
+
+// --- `arcane watch [path]` — collector → token-gated gateway → TUI, with the journal (M1B) ---
+
+function loadLinkOrExit(root: string): LinkInfo {
+  try {
+    return loadSession(root);
+  } catch (err) {
+    console.error(`✗ ${(err as Error).message}`);
+    return process.exit(1);
+  }
+}
 
 async function watch(target: string, noColor: boolean): Promise<void> {
   const root = resolve(target);
-  const session = makeSession();
+  const token = readToken();
+  if (!token) {
+    console.error("✗ not logged in — run `arcane login` first");
+    process.exit(1);
+  }
+  const session = loadLinkOrExit(root);
+  const journal = new Journal(root, session.sessionId, session.baseSnapshotId);
+
   const store = new Store({
     root,
     sessionId: session.sessionId,
     events: [],
     phase: null,
     conn: "connecting",
+    journalDepth: journal.depth(),
   });
 
   const ws = new WsClient({
-    url: CLOUD_URL,
+    url: cloudWsIngest(token),
     onResult: (ev) => {
-      // M1A: the gateway only echoes session-scoped `state` events; drive the pipeline stepper.
+      // M1B: the gateway echoes session-scoped `state` events; drive the pipeline stepper.
       if (ev.kind === "state") store.setPhase(ev.phase);
+    },
+    onAck: (ack) => {
+      // Acks drive the journal: drop covered events, advance the parent snapshot (§3A.3).
+      journal.onAck(ack);
+      store.setJournalDepth(journal.depth());
     },
     onState: (s) => store.setConn(s),
   });
@@ -40,18 +100,20 @@ async function watch(target: string, noColor: boolean): Promise<void> {
   const collector = new Collector({
     root,
     onChange: (change, seq) => {
-      // Build the wire envelope (§3A.2) and stream it. Synchronous from the collector's seq to
-      // the send → emission order == seq order (§3A.3). eventId/sessionId are real UUIDs.
+      // Build the wire envelope (§3A.2) onto the journal's current parent snapshot, journal it, then
+      // stream it. The journal keeps it until an ack covers its seq.
       const ev: ChangeEvent = {
         eventId: randomUUID(),
         sessionId: session.sessionId,
         projectId: session.projectId,
-        parentSnapshotId: session.parentSnapshotId,
+        parentSnapshotId: journal.parentSnapshot,
         seq,
         ts: Date.now(),
         ...change,
       };
+      journal.append(ev);
       store.addEvent(ev);
+      store.setJournalDepth(journal.depth());
       store.setPhase("detected"); // optimistic local state until the cloud streams its walk
       ws.send(ev);
     },
@@ -80,37 +142,55 @@ async function watch(target: string, noColor: boolean): Promise<void> {
   process.exit(0);
 }
 
-// --- `arcane sendtest` — the Session-0 one-shot round-trip proof (kept; now sees a `state` reply) ---
+// --- `arcane sendtest [path]` — a real one-shot M1B round-trip (login → link → one event → ack) ---
 
-function buildFakeChangeEvent(): ChangeEvent {
-  // eventId + sessionId are real UUIDs now that the schema enforces .uuid() (M1A decision #1).
-  return {
+async function sendtest(target: string): Promise<void> {
+  const root = resolve(target);
+  const httpBase = cloudHttpBase();
+  try {
+    await login(httpBase);
+  } catch (err) {
+    console.error(`✗ login failed: ${(err as Error).message}`);
+    console.error("  is the cloud running? start it with: npm run cloud");
+    process.exit(1);
+  }
+  const token = readToken();
+  if (!token) {
+    console.error("✗ login did not yield a token");
+    process.exit(1);
+  }
+
+  const info = await link(root, httpBase, token);
+  console.log(
+    `→ linked project ${info.projectId.slice(0, 8)} (baseSnapshot ${info.baseSnapshotId.slice(0, 8)})`,
+  );
+
+  await initHasher();
+  const content = "export const hello = 'arcane';\n";
+  const bytes = Buffer.from(content, "utf8");
+  const event: ChangeEvent = ChangeEventSchema.parse({
     eventId: randomUUID(),
-    sessionId: randomUUID(),
-    projectId: "project-0",
-    parentSnapshotId: "snapshot-0",
+    sessionId: info.sessionId,
+    projectId: info.projectId,
+    parentSnapshotId: info.baseSnapshotId,
     seq: 1,
     ts: Date.now(),
     op: "add",
-    path: "src/example.ts",
-    contentHash: "0000000000000000",
+    path: "arcane-sendtest.txt",
+    contentHash: hashBuffer(bytes),
+    sizeBytes: bytes.length,
     encoding: "utf8",
-    content: "export const hello = 'arcane';\n",
-  };
-}
+    content,
+  });
 
-function sendtest(): void {
-  const event = ChangeEventSchema.parse(buildFakeChangeEvent()); // validate before sending
-  const ws = new WebSocket(CLOUD_URL);
-
+  const ws = new WebSocket(cloudWsIngest(token));
   const timeout = setTimeout(() => {
-    console.error(`✗ timed out waiting for a ResultEvent from ${CLOUD_URL}`);
+    console.error("✗ timed out waiting for an Ack");
     ws.close();
     process.exit(1);
   }, 5_000);
 
   ws.on("open", () => {
-    console.log(`→ connected to ${CLOUD_URL}`);
     console.log(
       `→ ChangeEvent eventId=${event.eventId} seq=${event.seq} op=${event.op} path=${event.path}`,
     );
@@ -118,33 +198,27 @@ function sendtest(): void {
   });
 
   ws.on("message", (data) => {
-    clearTimeout(timeout);
     let payload: unknown;
     try {
       payload = JSON.parse(data.toString());
     } catch {
-      console.error("✗ received a non-JSON reply");
-      ws.close();
-      process.exit(1);
+      return;
     }
-    const parsed = ResultEventSchema.safeParse(payload);
-    if (!parsed.success) {
-      console.error("✗ invalid ResultEvent:", parsed.error.issues);
+    // The Ack proves the event was applied to the shadow worktree (the state walk is cosmetic).
+    if (payload && typeof payload === "object" && "ackSeq" in payload) {
+      clearTimeout(timeout);
+      console.log("← AckEvent:");
+      console.log(JSON.stringify(payload, null, 2));
+      console.log("✓ round-trip OK (event applied + acked)");
       ws.close();
-      process.exit(1);
+      process.exit(0);
     }
-    // The gateway now streams a `state` phase walk; the first frame proves the round-trip.
-    console.log("← ResultEvent:");
-    console.log(JSON.stringify(parsed.data, null, 2));
-    console.log("✓ round-trip OK");
-    ws.close();
-    process.exit(0);
   });
 
   ws.on("error", (err) => {
     clearTimeout(timeout);
     console.error(`✗ socket error: ${err.message}`);
-    console.error("  is the cloud stub running? start it with: npm run cloud");
+    console.error("  is the cloud running? start it with: npm run cloud");
     process.exit(1);
   });
 }
@@ -165,11 +239,19 @@ function main(): void {
     case "watch":
       void watch(args[1] ?? process.cwd(), noColor);
       return;
+    case "login":
+      void loginCmd();
+      return;
+    case "link":
+      void linkCmd(args[1] ?? process.cwd());
+      return;
     case "sendtest":
-      sendtest();
+      void sendtest(args[1] ?? process.cwd());
       return;
     default:
-      console.error(`"${cmd}": not available in this milestone (M1A). Try: arcane watch [path]`);
+      console.error(
+        `"${cmd}": not available in this milestone (M1B). Try: arcane login | link | watch [path]`,
+      );
       process.exit(2);
   }
 }

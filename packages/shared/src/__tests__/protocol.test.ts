@@ -10,9 +10,10 @@ import {
 function validChangeBase() {
   return {
     eventId: "00000000-0000-0000-0000-000000000001",
-    sessionId: "00000000-0000-0000-0000-0000000000a1", // eventId/sessionId are .uuid() now (M1A)
-    projectId: "project-1",
-    parentSnapshotId: "snap-0",
+    sessionId: "00000000-0000-0000-0000-0000000000a1",
+    // projectId + parentSnapshotId are .uuid() now too (M1B — real link + server snapshots).
+    projectId: "00000000-0000-0000-0000-0000000000b1",
+    parentSnapshotId: "00000000-0000-0000-0000-0000000000c0",
     seq: 1,
     ts: 1_700_000_000_000,
     op: "add",
@@ -32,7 +33,7 @@ describe("wire protocol round-trips through @arcane/shared", () => {
     const parsed = ChangeEventSchema.parse(event);
     expect(parsed.eventId).toBe(event.eventId);
     expect(parsed.seq).toBe(1);
-    expect(parsed.parentSnapshotId).toBe("snap-0");
+    expect(parsed.parentSnapshotId).toBe("00000000-0000-0000-0000-0000000000c0");
   });
 
   it("rejects an unknown op", () => {
@@ -96,10 +97,10 @@ describe("wire protocol round-trips through @arcane/shared", () => {
 
   it("parses an AckEvent (drives the journal)", () => {
     const ack = AckEventSchema.parse({
-      sessionId: "s",
+      sessionId: "00000000-0000-0000-0000-0000000000a1",
       ackSeq: 1,
       acceptedEventIds: ["00000000-0000-0000-0000-000000000001"],
-      serverSnapshotId: "snap-1",
+      serverSnapshotId: "00000000-0000-0000-0000-0000000000c1",
     });
     expect(ack.ackSeq).toBe(1);
   });

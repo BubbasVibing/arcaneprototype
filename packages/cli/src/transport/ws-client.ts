@@ -1,16 +1,24 @@
-import { ResultEventSchema, type ChangeEvent, type ResultEvent } from "@arcane/shared";
+import {
+  AckEventSchema,
+  ResultEventSchema,
+  type AckEvent,
+  type ChangeEvent,
+  type ResultEvent,
+} from "@arcane/shared";
 import { WebSocket } from "ws";
 
-// Authenticated WSS client is M1B; in M1A this is a plain ws client that streams ChangeEvents
-// and surfaces validated ResultEvents — the same pattern as the Session-0 `sendtest` round-trip.
-// No journal / replay / resync-on-gap here (those are M1B): events are only buffered until the
-// socket opens, then flushed in order.
+// The token-gated WS ingest client (M1B). It streams ChangeEvents to /ingest and demuxes the two
+// kinds of server → CLI frame: an AckEvent (has `ackSeq`, no `kind`) drives the journal; a
+// ResultEvent (has `kind`) drives the TUI. The token is carried in the connect URL (cloudWsIngest).
+// B1 buffers outbound events until the socket opens, then flushes in order; auto-reconnect, journal
+// replay, and resyncFrom handling are B2.
 
 export type ConnState = "connecting" | "open" | "closed" | "error";
 
 export interface WsClientOptions {
   url: string;
   onResult: (ev: ResultEvent) => void;
+  onAck?: (ack: AckEvent) => void;
   onState?: (state: ConnState, detail?: string) => void;
 }
 
@@ -39,6 +47,12 @@ export class WsClient {
         payload = JSON.parse(data.toString());
       } catch {
         return; // ignore non-JSON frames
+      }
+      // Demux by shape: AckEvent carries `ackSeq` and no `kind`; ResultEvent always has `kind`.
+      if (payload && typeof payload === "object" && "ackSeq" in payload) {
+        const ack = AckEventSchema.safeParse(payload);
+        if (ack.success) this.opts.onAck?.(ack.data);
+        return;
       }
       const parsed = ResultEventSchema.safeParse(payload);
       if (parsed.success) this.opts.onResult(parsed.data);

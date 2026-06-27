@@ -115,6 +115,7 @@ export function App({ store, noColor, onQuit }: AppProps) {
       {helpOpen ? <Help noColor={noColor} /> : null}
       <Footer
         conn={state.conn}
+        journalDepth={state.journalDepth}
         filtering={filtering}
         filter={filter}
         notice={notice}

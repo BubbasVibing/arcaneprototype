@@ -1,71 +1,79 @@
-import {
-  ChangeEventSchema,
-  ResultEventSchema,
-  type ResultEvent,
-  type ResultPhase,
-} from "@arcane/shared";
+import { bearerToken, isValidToken, mintDevToken } from "./auth";
+import { handleIngest } from "./ingest";
+import { handleLink } from "./link";
+import { InMemorySessionStore } from "./session-store";
+import { manifestHash } from "./shadow-worktree";
 
-// Arcane Cloud — M1A STILL-A-STUB gateway (Build Guide §6A). Receives ChangeEvents over a
-// WebSocket and, per valid event, echoes an ordered sequence of `state` ResultEvents walking the
-// pipeline so the TUI visibly advances. There is NO auth, shadow worktree, queue, analyzer, score
-// engine, or persistence here — real ingestion is M1B and analysis is M1C (§3B.1). Run with Bun.
+// Arcane Cloud — M1B REAL ingestion gateway (Build Guide §6 Lane E, the M1B sub-step). Turns the
+// M1A stub into real cloud ingestion: a stub-token session, `arcane link` materializing a shadow
+// worktree, streamed ChangeEvents applied to that worktree and acked, the `state` walk still echoed.
+// NO analyzers, score engine, queue, sandbox, AI, or Postgres here — analysis + persistence are
+// M1C (§3B.1). State is IN MEMORY (persistence deferred per the M1B decision); the shadow worktree
+// is on the server filesystem. Run with Bun.
 
-// STUB: the server-pipeline phases (§3B.1) replayed without doing any work. Session-scoped, since
-// the `state` variant carries no changeId (Technical-Spec §3B.2 / M1A decision #2).
-const PHASES: ResultPhase[] = ["detected", "uploading", "queued", "analyzing", "results", "done"];
-const PHASE_DELAY_MS = 120; // visible pacing for the demo, not a real latency model
-
+const store = new InMemorySessionStore();
 const port = Number(process.env.PORT ?? 8787);
 
-const server = Bun.serve({
+// Per-connection serialization chain: one `arcane watch` = one WS = one session, so serializing
+// every frame on the socket keeps the seq-check from racing concurrent applies into a false gap.
+interface IngestConn {
+  chain: Promise<void>;
+}
+
+const server = Bun.serve<IngestConn>({
   port,
-  fetch(req, server) {
-    // Upgrade every request to a WebSocket; the CLI streams change events over it.
-    if (server.upgrade(req)) return undefined;
-    return new Response("Arcane Cloud (stub). Connect over WebSocket.", { status: 426 });
+  async fetch(req, server) {
+    const url = new URL(req.url);
+
+    // STUB auth (§18): `arcane login` exchanges nothing and receives the configured dev token.
+    if (url.pathname === "/auth/token" && req.method === "POST") {
+      return Response.json({ token: mintDevToken() }, { status: 200 });
+    }
+
+    // `arcane link` — token-gated REST. Materializes the baseline → { projectId, baseSnapshotId }.
+    if (url.pathname === "/link" && req.method === "POST") {
+      if (!isValidToken(bearerToken(req))) return new Response("unauthorized", { status: 401 });
+      return handleLink(req, store);
+    }
+
+    // debug-only (the proof's no-drift assertion hook): the server's current manifest for a session.
+    // snapshotId is random and cannot be compared across ends — the manifest/manifestHash can.
+    if (url.pathname === "/debug/session" && req.method === "GET") {
+      const sid = url.searchParams.get("sessionId");
+      const s = sid ? await store.getSession(sid) : undefined;
+      if (!s) return new Response("no such session", { status: 404 });
+      return Response.json({
+        sessionId: s.sessionId,
+        projectId: s.projectId,
+        appliedSeq: s.appliedSeq,
+        currentSnapshotId: s.currentSnapshotId,
+        manifestHash: manifestHash(s.manifest),
+        files: Object.fromEntries([...s.manifest.entries()].sort()),
+      });
+    }
+
+    // `arcane watch` — the WS ingest channel, token-gated at the upgrade.
+    if (url.pathname === "/ingest") {
+      if (!isValidToken(url.searchParams.get("token"))) {
+        return new Response("unauthorized", { status: 401 });
+      }
+      if (server.upgrade(req, { data: { chain: Promise.resolve() } })) return undefined;
+      return new Response("expected a WebSocket upgrade", { status: 426 });
+    }
+
+    return new Response("Arcane Cloud (M1B). POST /auth/token, POST /link, WS /ingest.", {
+      status: 404,
+    });
   },
   websocket: {
-    async message(ws, raw) {
+    message(ws, raw) {
       const text = typeof raw === "string" ? raw : raw.toString();
-
-      let payload: unknown;
-      try {
-        payload = JSON.parse(text);
-      } catch {
-        console.error("✗ non-JSON message ignored");
-        return;
-      }
-
-      // Validate the inbound ChangeEvent against the shared contract (§3A.2).
-      const parsed = ChangeEventSchema.safeParse(payload);
-      if (!parsed.success) {
-        console.error("✗ invalid ChangeEvent:", parsed.error.issues);
-        const done: ResultEvent = { kind: "state", sessionId: "unknown", phase: "done" };
-        ws.send(JSON.stringify(done));
-        return;
-      }
-
-      const ev = parsed.data;
-      // The idempotency fields round-trip even though nothing consumes them yet (§3A.3).
-      console.log(
-        `← ChangeEvent eventId=${ev.eventId} seq=${ev.seq} op=${ev.op} path=${ev.path} ` +
-          `parentSnapshotId=${ev.parentSnapshotId}`,
-      );
-
-      // STUB: no ingestion/analysis. Echo the SESSION pipeline as ordered `state` events, paced so
-      // the terminal visibly advances and a round-trip never reads as a hang (Rule 8, invariant §16.10).
-      let first = true;
-      for (const phase of PHASES) {
-        if (!first) await Bun.sleep(PHASE_DELAY_MS);
-        first = false;
-        if (ws.readyState !== 1) return; // client (TUI) disconnected mid-walk — stop quietly
-        const state: ResultEvent = { kind: "state", sessionId: ev.sessionId, phase };
-        ResultEventSchema.parse(state); // self-check the contract before sending
-        ws.send(JSON.stringify(state));
-        console.log(`→ ResultEvent state phase=${phase} (seq=${ev.seq})`);
-      }
+      // Serialize apply+ack per connection (§3A.3 ordering); the state walk inside runs detached.
+      ws.data.chain = ws.data.chain
+        .then(() => handleIngest(ws, text, store))
+        .catch((err: unknown) => console.error("ingest error:", err));
     },
   },
 });
 
-console.log(`Arcane Cloud (stub) listening on ws://127.0.0.1:${server.port}`);
+console.log(`Arcane Cloud (M1B) listening on http://127.0.0.1:${server.port}  (ws path: /ingest)`);

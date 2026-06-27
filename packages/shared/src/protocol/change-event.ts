@@ -15,13 +15,14 @@ export const BlobRefSchema = z.object({ blobRef: z.string() });
 export type BlobRef = z.infer<typeof BlobRefSchema>;
 
 export const ChangeEventSchema = z.object({
-  // eventId + sessionId are real UUIDs the moment the collector exists (crypto.randomUUID),
-  // so they're tightened to z.string().uuid() (M1A decision #1). projectId/parentSnapshotId stay
-  // plain strings — they're placeholders until M1B brings real link + shadow-worktree snapshots.
+  // eventId + sessionId are real UUIDs the moment the collector exists (crypto.randomUUID).
+  // projectId + parentSnapshotId are now tightened too (M1B): `arcane link` mints a real projectId
+  // and the server materializes shadow-worktree snapshots with crypto.randomUUID ids (Technical-Spec
+  // §3A.4 / §7), so both are genuine UUIDs on every wire event past `link`.
   eventId: z.string().uuid(), // stable UUID — the unit of dedup (survives retries)
   sessionId: z.string().uuid(), // one watch session
-  projectId: z.string(),
-  parentSnapshotId: z.string(), // the shadow-worktree snapshot this event applies on top of
+  projectId: z.string().uuid(), // the linked project (arcane link → projects.id)
+  parentSnapshotId: z.string().uuid(), // the shadow-worktree snapshot this event applies on top of
   seq: z.number().int().nonnegative(), // strictly monotonic per session — server detects gaps
   ts: z.number(),
   op: ChangeOpSchema,
@@ -38,10 +39,10 @@ export type ChangeEvent = z.infer<typeof ChangeEventSchema>;
 
 // Server → CLI acknowledgement (§3A.2). Drives the journal: the CLI keeps events until acked.
 export const AckEventSchema = z.object({
-  sessionId: z.string(),
+  sessionId: z.string().uuid(), // tightened to match ChangeEvent.sessionId (M1B)
   ackSeq: z.number().int(), // highest CONTIGUOUS seq the server has durably applied
   acceptedEventIds: z.array(z.string()),
-  serverSnapshotId: z.string(), // resulting shadow-worktree snapshot
+  serverSnapshotId: z.string().uuid(), // resulting shadow-worktree snapshot (crypto.randomUUID, §7)
   resyncFrom: z.number().int().optional(), // present iff the server detected a gap
 });
 export type AckEvent = z.infer<typeof AckEventSchema>;
