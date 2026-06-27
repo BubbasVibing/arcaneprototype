@@ -1,5 +1,11 @@
 import { resolve } from "node:path";
-import { RunAcceptSchema, RunRequestSchema, type RunConsent } from "@arcane/shared";
+import {
+  hasRuntimeRegression,
+  RunAcceptSchema,
+  RunRequestSchema,
+  type RunAccept,
+  type RunConsent,
+} from "@arcane/shared";
 import { readToken } from "../auth/token";
 import { cloudHttpBase } from "../cloud";
 import { loadIgnoreRules, makeIgnoreMatcher } from "../collector/ignore";
@@ -9,6 +15,8 @@ import { loadSession } from "../session";
 import { promptConsent } from "./consent";
 import { buildBaselineTree, buildCurrentTree } from "./manifest";
 import { commandFingerprint, loadPermissions, resolveConsent, upsertGrant } from "./permissions";
+import { streamRun, type RunStreamResult } from "./stream";
+import { formatReportLines, mountRunView, RunStore } from "./run-view";
 
 // `arcane run [workload] --compare --baseline <ref> [--yes]` (Technical-Spec §19, A3). The THIN
 // trigger on top of M3D-1's cloud-authoritative gate: it resolves the consent decision (prompt /
@@ -174,10 +182,51 @@ export async function run(target: string, opts: RunOptions): Promise<void> {
   }
 
   const accept = RunAcceptSchema.parse(await res.json());
-  console.log("✓ run enqueued");
-  console.log(`  runId     ${accept.runId}`);
-  console.log(`  session   ${accept.runSessionId}`);
-  console.log(`  workload  ${workload.name}  (${baselineRef} → ${currentRef})`);
-  console.log("  results stream to the dashboard; the live CLI run view lands in M3D-3");
-  process.exit(0);
+
+  // --- M3D-3: open the read-only /run/stream socket, render the live run, set the exit code. ---
+  const result = await renderRun(token, accept, opts.noColor);
+  process.exit(runExitCode(result));
+}
+
+// Stream the run to completion, rendering it: an ink RunView on a TTY, plain progress lines in CI
+// (where the exit code is what matters). Returns the streamed result for the exit-code mapping.
+async function renderRun(token: string, accept: RunAccept, noColor: boolean): Promise<RunStreamResult> {
+  const isTty = Boolean(process.stdout.isTTY);
+
+  if (isTty) {
+    const store = new RunStore();
+    const view = mountRunView(store, noColor);
+    const result = await streamRun(token, accept.runSessionId, accept.runId, {
+      onPhase: (phase) => store.setPhase(phase),
+      onReport: (report) => store.setReport(report),
+    });
+    await new Promise((r) => setTimeout(r, 50)); // let ink paint the final frame
+    view.unmount();
+    return result;
+  }
+
+  // CI / headless: plain progress + the report as text lines (the exit code is the deliverable).
+  console.log(`→ run enqueued (runId ${accept.runId})`);
+  const result = await streamRun(token, accept.runSessionId, accept.runId, {
+    onPhase: (phase) => console.log(`→ ${phase}`),
+    onReport: (report) => {
+      for (const line of formatReportLines(report)) console.log(line);
+    },
+  });
+  return result;
+}
+
+// Exit-code mapping (the CI-relevant semantics M3D-2 deferred): a measured run with ≥1 attribution is
+// a regression → non-zero; a clean measured run → 0; a no-data run → 0 with a loud warning (don't fail
+// CI on an inability to measure — honesty is in the report's summary); an incomplete stream → 1.
+function runExitCode(result: RunStreamResult): number {
+  if (!result.completed || !result.report) {
+    console.error("✗ the run did not stream to completion — check the dashboard");
+    return 1;
+  }
+  if (result.report.status === "no-data") {
+    console.error("⚠ no runtime data — could not measure this run (exit 0; not failing CI)");
+    return 0;
+  }
+  return hasRuntimeRegression(result.report) ? 1 : 0;
 }

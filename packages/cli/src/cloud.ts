@@ -26,3 +26,12 @@ export function cloudWsIngest(token: string, git?: GitContext): string {
   if (git?.baselineSha) params.set("baselineSha", git.baselineSha);
   return `${ws}/ingest?${params.toString()}`;
 }
+
+// The token-gated, runSessionId-scoped WS for `arcane run`'s live view (M3D-3 /run/stream channel).
+// READ-ONLY results: the CLI opens it after the 202 to render this run's streamed events; it never
+// sends anything back (the channel cannot trigger or authorize a run).
+export function cloudWsRunStream(token: string, runSessionId: string): string {
+  const ws = cloudHttpBase().replace(/^http/, "ws");
+  const params = new URLSearchParams({ token, runSessionId });
+  return `${ws}/run/stream?${params.toString()}`;
+}
