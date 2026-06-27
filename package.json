@@ -13,7 +13,7 @@
   ],
   "scripts": {
     "build:shared": "npm run build -w @arcane/shared",
-    "build": "npm run build -w @arcane/shared && npm run build -w @arcane/cli",
+    "build": "npm run build -w @arcane/shared && npm run build -w @yassine115/arcane-cli",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "cloud": "npm run start -w @arcane/cloud",
