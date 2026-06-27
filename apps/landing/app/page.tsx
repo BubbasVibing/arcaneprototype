@@ -13,7 +13,7 @@ const THE_FLOW = [
     num: "001",
     barWidth: "25%",
     title: "Vibe-coded code looks done.",
-    desc: "AI agents write fast. The demo works. But N+1 queries, missing indexes, leaked secrets, and type holes accumulate silently — invisible until real users hit them.",
+    desc: "Agentic coding is astonishing at turning a prompt into a working app. But the demo ships — then it doesn't hold up. Slow, bloated, insecure, fragile.",
   },
   {
     num: "002",
@@ -25,7 +25,7 @@ const THE_FLOW = [
     num: "003",
     barWidth: "75%",
     title: "Cloud scores it in real time.",
-    desc: "Complexity, dead code, secrets, security — analyzed server-side against a shadow copy of your repo. First result in under a second.",
+    desc: "Complexity, dead code, performance, security — analyzed server-side against a shadow copy of your repo.",
   },
   {
     num: "004",
@@ -119,7 +119,7 @@ export default function TerraPage() {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const dynamicWords = ["code quality", "security", "complexity", "dead code", "type safety", "dependencies", "performance"]
+  const dynamicWords = ["Quality", "Performance", "Security", "Scalability", "Dependencies"]
 
   useEffect(() => {
     const wordInterval = setInterval(() => {
@@ -225,8 +225,7 @@ export default function TerraPage() {
                 className="text-[#A7ABB3] text-base md:text-lg max-w-[540px] mx-auto mb-8 leading-relaxed stagger-reveal text-white"
                 style={{ animationDelay: "180ms" }}
               >
-                A thin CLI streams every change to Arcane Cloud. Live scores and findings stream back
-                to your terminal <em>and</em> browser — simultaneously, as your agent writes.
+                Catch what your AI agent misses — live code evaluation as you build.
               </p>
               <div className="stagger-reveal" style={{ animationDelay: "270ms" }}>
                 <button
