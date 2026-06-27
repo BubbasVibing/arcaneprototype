@@ -10,12 +10,18 @@ import { ScoreSchema } from "../domain/score";
 // pipeline states (§2A/§3B.1: change detected → uploading → queued → analyzing → results), so the
 // contract covers every state the terminal renders without a later breaking change.
 // ('detected' = "change detected".)
+//
+// M3D (approved Q4): a RUN's lifecycle rides the SAME kind:'state' event — `running` (sandbox
+// executing) and `measuring` (alternating runs in flight) — NOT a new wire event. `queued`/`done` are
+// reused for the run-job lifecycle too.
 export const ResultPhaseSchema = z.enum([
   "detected",
   "uploading",
   "queued",
   "analyzing",
   "results",
+  "running", // M3D: a run job is executing in the sandbox
+  "measuring", // M3D: the Runtime Delta Engine's alternating runs are in flight
   "done",
 ]);
 export type ResultPhase = z.infer<typeof ResultPhaseSchema>;
@@ -24,6 +30,9 @@ export const StateResultSchema = z.object({
   kind: z.literal("state"),
   sessionId: z.string(),
   phase: ResultPhaseSchema,
+  // M3D: present on RUN lifecycle events so a consumer can disambiguate concurrent runs / run-vs-
+  // analysis on the shared project:{id} channel. Absent for static-analysis state events.
+  runId: z.string().optional(),
 });
 
 // { kind: 'score'; dimension; value; delta } — reuses the Score domain shape (§6).
@@ -37,10 +46,12 @@ export const FindingResultSchema = z.object({
   isNew: z.boolean(),
 });
 
-// Runtime Delta Engine (§19A) — RunReport is a placeholder until M3 (see domain/run-report.ts).
+// Runtime Delta Engine (§19A). M3D streams this as the final event of a run job; `runId` ties it to
+// the run's `state` lifecycle events on the shared channel.
 export const RunResultSchema = z.object({
   kind: z.literal("run"),
   report: RunReportSchema,
+  runId: z.string().optional(),
 });
 
 export const ResultEventSchema = z.discriminatedUnion("kind", [

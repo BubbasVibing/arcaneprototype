@@ -1,4 +1,5 @@
 import type { Finding } from "../domain/finding";
+import type { RunReport } from "../domain/run-report";
 import type { Score } from "../domain/score";
 import type { ResultEvent, ResultPhase } from "../protocol/result-event";
 
@@ -21,10 +22,11 @@ export interface ResultView {
   scores: Score[]; // latest per dimension, sorted by dimension
   findings: ResultFinding[]; // findings of the current frame
   sessionId: string | null; // the session this view reflects (set from `state` events)
+  run: RunReport | null; // M3D: the latest Runtime Delta Engine report (the live run view, §19A)
 }
 
 export function emptyResultView(): ResultView {
-  return { phase: null, scores: [], findings: [], sessionId: null };
+  return { phase: null, scores: [], findings: [], sessionId: null, run: null };
 }
 
 export function applyResultEvent(view: ResultView, ev: ResultEvent): ResultView {
@@ -46,6 +48,8 @@ export function applyResultEvent(view: ResultView, ev: ResultEvent): ResultView 
     case "finding":
       return { ...view, findings: [...view.findings, { ...ev.finding, isNew: ev.isNew }] };
     case "run":
-      return view; // Runtime Delta Engine (§19A) — not emitted in M1
+      // M3D: store the latest RunReport so the terminal and the web dashboard render the same live
+      // run view (invariant 4 — same data, same shapes on both surfaces).
+      return { ...view, run: ev.report };
   }
 }

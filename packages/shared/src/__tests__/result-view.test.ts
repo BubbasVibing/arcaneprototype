@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { ResultEvent } from "../index";
 import { applyResultEvent, emptyResultView } from "../index";
 
-// Pins the shared reducer used by BOTH the terminal and the web dashboard (M1D). The semantics must
+// Pins the shared reducer used by BOTH the terminal and the web dashboard (M1D/M3D). The semantics must
 // match tui/store.ts: `analyzing` clears findings (new frame), `score` upserts per dimension (never
-// cleared), `finding` accumulates, `state` sets phase + sessionId, `run` is a no-op.
+// cleared), `finding` accumulates, `state` sets phase + sessionId, `run` stores the latest RunReport.
 
 const SID = "00000000-0000-0000-0000-0000000000a1";
 
@@ -24,7 +24,7 @@ const reduce = (events: ResultEvent[]) => events.reduce(applyResultEvent, emptyR
 describe("applyResultEvent (shared TUI/web reducer)", () => {
   it("starts empty", () => {
     const v = emptyResultView();
-    expect(v).toEqual({ phase: null, scores: [], findings: [], sessionId: null });
+    expect(v).toEqual({ phase: null, scores: [], findings: [], sessionId: null, run: null });
   });
 
   it("reduces one full frame: analyzing → findings → scores → results → done", () => {
@@ -77,19 +77,20 @@ describe("applyResultEvent (shared TUI/web reducer)", () => {
     expect(afterScore2.scores).toEqual([{ dimension: "complexity", value: 100, delta: 30 }]);
   });
 
-  it("`run` is a no-op (not emitted in M1)", () => {
+  it("`run` stores the latest RunReport (M3D live run view)", () => {
     const before = reduce([{ kind: "state", sessionId: SID, phase: "done" }]);
-    const after = applyResultEvent(before, {
-      kind: "run",
-      report: {
-        workload: "w",
-        baselineRef: "origin/main",
-        currentRef: "working-tree",
-        confidence: "high",
-        summary: "s",
-      },
-    });
-    expect(after).toEqual(before);
+    const report = {
+      workload: "w",
+      baselineRef: "origin/main",
+      currentRef: "working-tree",
+      confidence: "high" as const,
+      summary: "s",
+    };
+    const after = applyResultEvent(before, { kind: "run", report, runId: "r1" });
+    expect(after.run).toEqual(report);
+    // other view fields are untouched
+    expect(after.phase).toBe(before.phase);
+    expect(after.findings).toEqual(before.findings);
   });
 
   it("does not mutate the input view (immutability)", () => {
