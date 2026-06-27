@@ -58,9 +58,14 @@ export const TRACE_SENTINEL = "__ARCANE_TRACE__ ";
 //   complete sentinel line, and the probe writes its trace in the `exit` handler (after all normal
 //   workload output), so a forged line printed DURING the run never overrides the genuine one. The
 //   residual gap — a workload that registers a LATER exit handler to forge after the probe — is the
-//   documented trusted-workload assumption. *** M3C MUST add a tamper-resistant channel (e.g. an
-//   out-of-process observer the workload cannot write to) before runtime ATTRIBUTION is allowed to
-//   rest on a workload-forgeable signal like queryCount. ***
+//   documented trusted-workload assumption.
+//   *** M3C DECISION (Runtime Delta Engine, delta-engine.ts): KEPT the bounded trusted-workload
+//   assumption — M3C is TEST-HARNESS-TRIGGERED ONLY (no untrusted trigger reaches the engine yet) and
+//   forging fools only the developer measuring their OWN code; containment is unaffected. The
+//   determinism check in delta-engine (queryCount constant within each side's repeats) defends
+//   FLAKINESS, not tampering. THE OBLIGATION CARRIES FORWARD: M3D MUST NOT open the public execution
+//   trigger — the first point an UNTRUSTED party chooses the workload a Finding rests on — until an
+//   out-of-process query observer the workload cannot write to is in place. ***
 
 // Every required field present and correctly typed. This is what makes "partial parses as whole"
 // impossible: a truncated JSON object loses its closing brace → JSON.parse throws; a structurally
