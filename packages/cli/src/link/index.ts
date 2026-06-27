@@ -1,15 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import {
   LinkRequestSchema,
   LinkResponseSchema,
   type ArcaneConfig,
   type GitContext,
-  type ManifestFile,
 } from "@arcane/shared";
-import { initHasher, readFileContent } from "../collector/hash";
 import { loadIgnoreRules, makeIgnoreMatcher, type IgnoreRules } from "../collector/ignore";
-import { walkRepo } from "../repo-walk";
+import { buildCurrentTree } from "../run/manifest";
 import { saveLink, type LinkInfo } from "../session";
 
 // `arcane link` (Technical-Spec §3A.4): build the initial manifest (path → xxhash) + inline bytes,
@@ -30,24 +27,10 @@ export async function link(
   token: string,
   opts: LinkOptions = {},
 ): Promise<LinkInfo> {
-  await initHasher(); // WASM ready before any file is hashed
   const rules = opts.rules ?? (await loadIgnoreRules(root, opts.projectIgnore));
   const ignore = makeIgnoreMatcher(rules);
-  const paths = await walkRepo(root, ignore);
-
-  const files: ManifestFile[] = [];
-  for (const path of paths) {
-    const fc = await readFileContent(join(root, path));
-    const file: ManifestFile = {
-      path,
-      contentHash: fc.hash,
-      sizeBytes: fc.size,
-      encoding: fc.encoding,
-    };
-    if (fc.isBinary) file.isBinary = true;
-    if (fc.content !== undefined) file.content = fc.content; // inline only when utf8 (else hash-only)
-    files.push(file);
-  }
+  // The working-tree manifest — one authority, shared with `arcane run`'s current tree (no drift).
+  const files = await buildCurrentTree(root, ignore);
 
   const body = LinkRequestSchema.parse({
     files,

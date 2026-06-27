@@ -12,6 +12,7 @@ import { readGitContext } from "./git";
 import { Journal } from "./journal";
 import { link } from "./link";
 import { manifestResync } from "./resync";
+import { run, type RunOptions } from "./run";
 import { loadSession, type LinkInfo } from "./session";
 import { WsClient } from "./transport/ws-client";
 import { mountTui } from "./tui/render";
@@ -360,6 +361,36 @@ async function sendtest(target: string): Promise<void> {
   });
 }
 
+// Parse `run [workload] --compare --baseline <ref> --yes`. A bad flag/extra arg exits 2 (usage).
+function parseRunArgs(rest: string[], noColor: boolean): RunOptions {
+  const opts: RunOptions = { compare: false, yes: false, noColor };
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === undefined) continue;
+    if (a === "--compare") opts.compare = true;
+    else if (a === "--yes") opts.yes = true;
+    else if (a === "--baseline") {
+      const ref = rest[++i];
+      if (!ref) {
+        console.error("✗ --baseline needs a ref, e.g. `--baseline origin/main`");
+        process.exit(2);
+      }
+      opts.baseline = ref;
+    } else if (a.startsWith("--baseline=")) {
+      opts.baseline = a.slice("--baseline=".length);
+    } else if (a.startsWith("-")) {
+      console.error(`✗ unknown flag: ${a}`);
+      process.exit(2);
+    } else if (opts.workload === undefined) {
+      opts.workload = a;
+    } else {
+      console.error(`✗ unexpected argument: ${a}`);
+      process.exit(2);
+    }
+  }
+  return opts;
+}
+
 function main(): void {
   const argv = process.argv.slice(2);
   const noColor = Boolean(process.env.NO_COLOR) || argv.includes("--no-color");
@@ -382,12 +413,15 @@ function main(): void {
     case "link":
       void linkCmd(args[1] ?? process.cwd());
       return;
+    case "run":
+      void run(process.cwd(), parseRunArgs(args.slice(1), noColor));
+      return;
     case "sendtest":
       void sendtest(args[1] ?? process.cwd());
       return;
     default:
       console.error(
-        `"${cmd}": not available in this milestone (M1B). Try: arcane login | link | watch [path]`,
+        `"${cmd}": not a known command. Try: arcane login | link | watch [path] | run <workload> --compare`,
       );
       process.exit(2);
   }
