@@ -112,13 +112,18 @@ export function App({ store, noColor, onQuit }: AppProps) {
 
   return (
     <Box flexDirection="column">
-      <Box paddingX={1}>
-        <Text bold color={noColor ? undefined : theme.accent}>
-          arcane
-        </Text>
-        <Text color={noColor ? undefined : "gray"}>
-          {"  "}watch · {state.root}
-        </Text>
+      <Box flexDirection="column" paddingX={1}>
+        <Box>
+          <Text bold color={noColor ? undefined : theme.accent}>
+            arcane
+          </Text>
+          <Text color={noColor ? undefined : "gray"}>
+            {"  "}watch · {state.root}
+          </Text>
+        </Box>
+        {state.dashboardUrl ? (
+          <Text color={noColor ? undefined : theme.accent}>dashboard → {state.dashboardUrl}</Text>
+        ) : null}
       </Box>
       <PipelineState phase={state.phase} noColor={noColor} />
       {state.showScores ? <Scores scores={state.scores} noColor={noColor} /> : null}

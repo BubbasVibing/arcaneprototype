@@ -25,7 +25,9 @@ export async function handleLink(req: Request, store: SessionStore): Promise<Res
     );
   }
 
-  const projectId = randomUUID(); // projects.id (§7)
+  // Repo-stable id from the CLI (UUIDv5 of the git remote/path) so the dashboard URL doesn't change
+  // across re-links; else mint one. ensureProject upserts on it, so a re-link reuses the same project.
+  const projectId = parsed.data.projectId ?? randomUUID(); // projects.id (§7)
   const manifest = await materializeBaseline(projectId, parsed.data.files);
   const baseSnapshotId = randomUUID(); // source_snapshots.id (§7) — minted, not content-derived
   await store.registerBaseline(projectId, {
