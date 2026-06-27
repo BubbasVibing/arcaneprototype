@@ -28,6 +28,15 @@ export function findingsFromReport(report: RunReport): Finding[] {
         confidence: a.confidence,
         evidence: a.evidence,
         functionName: a.functionName,
+        // M3D integrity bound: queryCount rides an in-process probe the workload could forge, so the N+1
+        // finding is ADVISORY — honest under the trusted-workload assumption, NOT a tamper-proof claim.
+        // The tamper-resistant out-of-process observer lands with multi-tenant auth (see trace.ts).
+        ...(a.ruleId === RULE_N_PLUS_ONE
+          ? {
+              advisory:
+                "queryCount is self-reported by the workload (in-process probe) under the trusted-workload assumption — not tamper-proof",
+            }
+          : {}),
       },
     });
   }

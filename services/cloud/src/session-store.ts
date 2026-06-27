@@ -35,6 +35,9 @@ export interface SessionState {
 export interface SessionStore {
   // `arcane link`: record a project's materialized baseline so the first watch event can seed from it.
   registerBaseline(projectId: string, baseline: Omit<ProjectBaseline, "lastActiveAt">): Promise<void>;
+  // The project's link-time baseline (carries the authoritative ArcaneConfig). M3D's run endpoint +
+  // worker read config from here to gate execution; undefined ⇒ never linked / reaped → fail closed.
+  getBaseline(projectId: string): Promise<ProjectBaseline | undefined>;
   // First event of a session: create state seeded from the project baseline. `parentSnapshotId` is
   // the baseSnapshotId the CLI carries from `link`. Throws if the project was never linked here.
   getOrCreateSession(
@@ -64,6 +67,10 @@ export class InMemorySessionStore implements SessionStore {
     baseline: Omit<ProjectBaseline, "lastActiveAt">,
   ): Promise<void> {
     this.baselines.set(projectId, { ...baseline, lastActiveAt: Date.now() });
+  }
+
+  async getBaseline(projectId: string): Promise<ProjectBaseline | undefined> {
+    return this.baselines.get(projectId);
   }
 
   async getOrCreateSession(

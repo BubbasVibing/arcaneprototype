@@ -2,6 +2,8 @@ import type { GitContext } from "@arcane/shared";
 import { bearerToken, isValidToken, mintDevToken } from "./auth";
 import { handleIngest } from "./ingest";
 import { handleLink } from "./link";
+import { handleRun } from "./run-endpoint";
+import { startRunWorker } from "./run-queue";
 import { InMemorySessionStore } from "./session-store";
 import { listShadowProjectDirs, manifestHash, removeProjectDir } from "./shadow-worktree";
 
@@ -41,6 +43,9 @@ interface IngestConn {
 
 const server = Bun.serve<IngestConn>({
   port,
+  // M3D deployment hardening: bind loopback only. Execution is too dangerous to expose on all
+  // interfaces under a stub token; a real fronting proxy/auth is a later concern (M7/M8).
+  hostname: "127.0.0.1",
   async fetch(req, server) {
     const url = new URL(req.url);
 
@@ -84,6 +89,13 @@ const server = Bun.serve<IngestConn>({
         serverSnapshotId: s.currentSnapshotId,
         files: Object.fromEntries([...s.manifest.entries()].sort()),
       });
+    }
+
+    // `arcane run` — M3D public execution trigger, token-gated REST. The cloud is the AUTHORITATIVE
+    // consent gate (it runs the code); handleRun enforces all three §19.1 gates + server-derives the argv.
+    if (url.pathname === "/run" && req.method === "POST") {
+      if (!isValidToken(bearerToken(req))) return new Response("unauthorized", { status: 401 });
+      return handleRun(req, store);
     }
 
     // `arcane watch` — the WS ingest channel, token-gated at the upgrade.
@@ -141,3 +153,7 @@ const reaper = setInterval(() => {
   });
 }, REAP_INTERVAL_MS);
 reaper.unref(); // don't keep the process alive for the reaper alone
+
+// M3D cold-path run worker — drains the Postgres run_jobs queue, decoupled from the hot static fan-out.
+startRunWorker(store);
+console.log("🏃 run worker started (cold-path queue)");

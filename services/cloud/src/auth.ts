@@ -16,6 +16,16 @@ export function isValidToken(token: string | null | undefined): boolean {
   return typeof token === "string" && token.length > 0 && token === DEV_TOKEN;
 }
 
+// M3D deployment hardening: the default dev token is guessable and Bun binds an interface, so the
+// EXECUTION endpoint (/run) must refuse it in production — execution is too dangerous to gate on a
+// shared default. True iff the guessable default token is in effect AND we're in production; in
+// dev/test (no NODE_ENV=production) it is allowed so the stub flow + tests work.
+export function defaultExecutionTokenForbidden(): boolean {
+  const usingDefaultToken = !process.env.ARCANE_DEV_TOKEN; // the literal "dev-stub-token" is in effect
+  const isProd = process.env.NODE_ENV === "production";
+  return usingDefaultToken && isProd;
+}
+
 // Extract a bearer token from an `Authorization: Bearer <t>` header (REST) — null if absent.
 export function bearerToken(req: Request): string | null {
   const header = req.headers.get("authorization");

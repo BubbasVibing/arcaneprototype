@@ -63,9 +63,17 @@ export const TRACE_SENTINEL = "__ARCANE_TRACE__ ";
 //   assumption — M3C is TEST-HARNESS-TRIGGERED ONLY (no untrusted trigger reaches the engine yet) and
 //   forging fools only the developer measuring their OWN code; containment is unaffected. The
 //   determinism check in delta-engine (queryCount constant within each side's repeats) defends
-//   FLAKINESS, not tampering. THE OBLIGATION CARRIES FORWARD: M3D MUST NOT open the public execution
-//   trigger — the first point an UNTRUSTED party chooses the workload a Finding rests on — until an
-//   out-of-process query observer the workload cannot write to is in place. ***
+//   FLAKINESS, not tampering.
+//   *** M3D RESOLUTION (run-endpoint.ts / run-gate.ts): the public `arcane run` trigger is now OPEN, but
+//   the trusted-workload assumption is kept under ENFORCED bounds — so the precondition NARROWS from
+//   "no public trigger" to "NO CROSS-PARTY-TRUST trigger until the out-of-process query observer lands":
+//     (1) an executable single-tenant guard (run-gate Gate 0) refuses any run outside the single dev org
+//         — it fails closed the instant a second tenant could trigger a run;
+//     (2) the gateway binds loopback + refuses the default dev token on /run in prod (deployment hardening);
+//     (3) the runtime/n-plus-one Finding is marked ADVISORY (findings.ts metadata) — honest under the
+//         assumption, never a tamper-proof claim.
+//   THE OBLIGATION STILL STANDS for multi-tenant: M7/M8 MUST add the out-of-process query observer the
+//   workload cannot write to BEFORE relaxing Gate 0 to allow a second tenant to trigger a run. ***
 
 // Every required field present and correctly typed. This is what makes "partial parses as whole"
 // impossible: a truncated JSON object loses its closing brace → JSON.parse throws; a structurally
