@@ -200,7 +200,7 @@ async function renderRun(token: string, accept: RunAccept, noColor: boolean): Pr
       onPhase: (phase) => store.setPhase(phase),
       onReport: (report) => store.setReport(report),
     });
-    await new Promise((r) => setTimeout(r, 50)); // let ink paint the final frame
+    await new Promise((r) => setTimeout(r, 150)); // let ink fully paint the final multi-line frame
     view.unmount();
     return result;
   }

@@ -123,10 +123,34 @@ function ReportView({ report, noColor }: { report: RunReport; noColor: boolean }
           <Text color={dim}>attribution</Text>
           {(report.attribution ?? []).map((a, i) => {
             const adv = runtimeAdvisory(a.ruleId);
+            const where = a.functionName ? `${a.file} · ${a.functionName}` : a.file;
+            const loc = a.range ? `:${a.range.startLine}` : "";
+            // Each piece on its OWN row (a long combined string mis-wraps in ink, colliding with the
+            // caveat). The advisory is the honesty line — give it its own block + a blank line above so
+            // it can never run into the wrapped evidence, at any terminal width.
             return (
-              <Box flexDirection="column" key={`${a.ruleId}:${a.file}:${i}`}>
-                <Text>{"  "}{attributionSummary(a)}</Text>
-                {adv ? <Text color={noColor ? undefined : "yellow"}>{"    ⚠ advisory: "}{adv}</Text> : null}
+              <Box flexDirection="column" marginTop={1} key={`${a.ruleId}:${a.file}:${i}`}>
+                <Text>
+                  {"  "}
+                  <Text bold>{a.ruleId}</Text>
+                  <Text color={dim}>
+                    {"  "}
+                    {where}
+                    {loc}
+                  </Text>
+                </Text>
+                <Text wrap="wrap">
+                  {"  "}
+                  {a.evidence}
+                </Text>
+                {adv ? (
+                  <Box marginTop={1}>
+                    <Text wrap="wrap" color={noColor ? undefined : "yellow"}>
+                      {"  ⚠ advisory: "}
+                      {adv}
+                    </Text>
+                  </Box>
+                ) : null}
               </Box>
             );
           })}
